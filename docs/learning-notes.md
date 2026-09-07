@@ -160,3 +160,13 @@ Memory 是持久化候选信息，Context 是某次模型调用临时选择出�
 - 模型只能引用 Runtime 提供的候选 ID。即使结构化输出合法，引用不在候选集合中的 ID 仍是无效判断。
 - 重复和冲突的处理不同。重复 Candidate 不落库并指向已有 Memory；冲突 Candidate 保持待复核，直到版本与 supersede 规则决定哪条是当前事实。
 - SQLAlchemy `commit` 后对象属性可能过期。测试如果关闭 Session 后仍读取 ORM 对象，应提前保存稳定 ID 或重新查询，避免 `DetachedInstanceError`。
+
+## 16. DeepSeek 模型适配学习心得
+
+- OpenAI 兼容表示请求协议相近，不表示每个能力完全相同。DeepSeek 可以通过 OpenAI SDK 调用 Chat Completions、Tool Calls 和 JSON Output，但不能据此假设它提供 Embeddings。
+- Agent Harness 应依赖自己的 `AgentModel` 和 `SemanticMemoryEvaluator` 接口。供应商适配器只负责把统一请求翻译成特定 API，再把结果翻译回来。
+- JSON Output 保证返回 JSON，Pydantic 再验证字段、枚举和 ID 类型；Runtime 仍负责核对 ID 和 provenance 是否真实。
+- 密钥只从环境变量或被 Git 忽略的本地文件读取。它不能进入 prompt、Trace、数据库、测试快照或异常消息。
+- 单元测试应模拟 SDK 响应，验证协议转换而不产生费用；真实连通测试单独执行，并且不能打印请求头或密钥。
+- 最小真实连通测试已创建 `AgentRun #14`：模型返回了 `get_skill_demand` 工具调用，并记录 token 用量。它证明网络、鉴权、协议转换和结果解析可以协同工作，但不代表完整业务链路已经验证。
+- “允许使用某个模型 API”和“允许把哪些项目数据发送给该模型”是两种权限。完整运行会外发 task goal、Memory Context 和 tool observations，因此 Harness 还需要显式的数据出站策略，而不能只检查 API key 是否存在。

@@ -15,3 +15,4 @@ test_careerops_checkpoints.db
 htmlcov/
 .debug/
 hw_decoded_defanged.txt
+ds_key.txt

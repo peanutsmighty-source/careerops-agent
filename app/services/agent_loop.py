@@ -16,11 +16,13 @@ from app.services.authorization import get_or_create_task_policy
 from app.services.memory_evaluator import evaluate_and_store_run_memories
 from app.services.memory_lifecycle import retire_run_working_memories
 from app.services.memory_runtime import assemble_memory_context
+from app.services.model_credentials import load_deepseek_api_key
 from app.services.tool_runtime import run_tool_call, serialize_tool_call
 from app.services.tools import list_tools
 
 
 DEFAULT_OPENAI_MODEL = os.getenv("CAREEROPS_OPENAI_MODEL", "gpt-5-mini")
+DEFAULT_DEEPSEEK_MODEL = os.getenv("CAREEROPS_DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
 @dataclass(frozen=True)
@@ -157,6 +159,73 @@ class OpenAIResponsesAgentModel:
         raise ValueError("model returned neither a tool call nor a final answer")
 
 
+class DeepSeekChatAgentModel:
+    provider = "deepseek"
+
+    def __init__(self, model: str | None = None) -> None:
+        from openai import OpenAI
+
+        self.model = model or DEFAULT_DEEPSEEK_MODEL
+        self._client = OpenAI(
+            api_key=load_deepseek_api_key(),
+            base_url="https://api.deepseek.com",
+        )
+
+    def decide(self, request: AgentModelRequest) -> AgentDecision:
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the CareerOps single-agent planner. Choose at most one "
+                        "tool per turn. Use tools only when their observations are needed. "
+                        "When the task can be answered, return a concise final answer. "
+                        "Never claim permissions or invent tool results."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(request.as_dict(), ensure_ascii=False),
+                },
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": tool["input_schema"],
+                    },
+                }
+                for tool in request.tools
+            ],
+        )
+        message = response.choices[0].message
+        usage = response.usage
+        metadata = {
+            "completion_id": response.id,
+            "prompt_tokens": usage.prompt_tokens if usage else 0,
+            "completion_tokens": usage.completion_tokens if usage else 0,
+        }
+        if message.tool_calls:
+            tool_call = message.tool_calls[0]
+            return AgentDecision(
+                action_type="tool_call",
+                tool_name=tool_call.function.name,
+                arguments=json.loads(tool_call.function.arguments),
+                call_id=tool_call.id,
+                provider_metadata=metadata,
+            )
+        if message.content:
+            return AgentDecision(
+                action_type="final_answer",
+                content=message.content,
+                provider_metadata=metadata,
+            )
+        raise ValueError("DeepSeek returned neither a tool call nor a final answer")
+
+
 def create_agent_model(provider: str, model: str | None = None) -> AgentModel:
     if provider == "demo":
         return DemoAgentModel()
@@ -166,6 +235,14 @@ def create_agent_model(provider: str, model: str | None = None) -> AgentModel:
         except Exception as exc:
             raise ValueError(
                 "OpenAI provider is not configured; set OPENAI_API_KEY before starting the run"
+            ) from exc
+    if provider == "deepseek":
+        try:
+            return DeepSeekChatAgentModel(model)
+        except Exception as exc:
+            raise ValueError(
+                "DeepSeek provider is not configured; set DEEPSEEK_API_KEY "
+                "or provide a non-empty ds_key.txt"
             ) from exc
     raise ValueError(f"unknown agent model provider: {provider}")
 

@@ -51,6 +51,19 @@ uvicorn app.main:app --reload
 Open `http://127.0.0.1:8000/` for the visual Runtime Console. Use
 `http://127.0.0.1:8000/docs` when you want to inspect or call the raw API.
 
+### DeepSeek
+
+The Runtime Console supports `demo`, `openai`, and `deepseek` Agent models. To
+use DeepSeek, set `DEEPSEEK_API_KEY`, or place the key as the only non-empty line
+in `ds_key.txt` at the repository root. The key file is ignored by Git and must
+never be added with `git add -f`.
+
+The default model is `deepseek-v4-flash`; override it in the Runtime Console or
+with `CAREEROPS_DEEPSEEK_MODEL`. `CAREEROPS_DEEPSEEK_KEY_FILE` can point to a
+key file outside the repository. DeepSeek is used for Agent decisions and JSON
+semantic evaluation. The project does not treat its chat endpoint as an
+Embedding API.
+
 ## Test
 
 ```powershell

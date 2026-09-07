@@ -104,6 +104,8 @@ Semantic Evaluator 使用 Pydantic 结构化输出，同时给出类型、长期
 
 Embedding 适配器是可选依赖。没有配置时使用确定性词法 Jaccard 召回；配置 OpenAI Embedding 后会记录 `embedding_calls`、`embedding_tokens`、模型版本、候选 ID 和相似度。Embedding 只负责缩小比较范围，不能独立删除 Memory。召回失败时不会继续让模型凭空判断。
 
+Semantic Evaluator 同时支持 OpenAI Structured Outputs 和 DeepSeek JSON Output。DeepSeek 的 JSON 会在本地再次经过 Pydantic 校验；DeepSeek Chat API 不承担 Embedding 召回。
+
 Run 完成、审核结果、可选的 episodic memory 和 memory trace 在同一个数据库事务中提交。不会出现 Run 已标记完成，但审核记录丢失的半完成状态。
 
 ## 为什么不能读取全部记忆

@@ -597,7 +597,7 @@ async function runAgentLoop() {
       method: "POST",
       body: JSON.stringify({
         provider,
-        model: provider === "openai" ? elements["agent-model"].value.trim() : null,
+        model: provider === "demo" ? null : elements["agent-model"].value.trim(),
         max_steps: Number(elements["agent-max-steps"].value),
       }),
     });
@@ -623,7 +623,13 @@ async function runAgentLoop() {
 }
 
 function renderAgentProvider() {
-  elements["agent-model-row"].hidden = elements["agent-provider"].value !== "openai";
+  const provider = elements["agent-provider"].value;
+  const modelInput = elements["agent-model"];
+  elements["agent-model-row"].hidden = provider === "demo";
+  if (modelInput.dataset.provider !== provider) {
+    modelInput.value = provider === "deepseek" ? "deepseek-v4-flash" : "gpt-5-mini";
+    modelInput.dataset.provider = provider;
+  }
 }
 
 async function recoverAgentRuns() {

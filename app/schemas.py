@@ -375,7 +375,7 @@ class ToolRecoveryRunRead(BaseModel):
 class AgentRunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["demo", "openai"] = "demo"
+    provider: Literal["demo", "openai", "deepseek"] = "demo"
     model: str | None = Field(default=None, min_length=1, max_length=120)
     max_steps: int = Field(default=4, ge=1, le=8)
 
@@ -406,7 +406,7 @@ class AgentRunRead(BaseModel):
 
     id: int
     task_id: int
-    provider: Literal["demo", "openai"]
+    provider: Literal["demo", "openai", "deepseek"]
     model: str
     status: Literal["running", "completed", "max_steps", "failed", "needs_review"]
     max_steps: int
