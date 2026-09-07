@@ -31,7 +31,7 @@ Tracked count: **18 capabilities**: 3 complete and 15 open. Sources: 8 `user-dir
   - Only call it after deterministic rules leave an ambiguous decision.
   - Acceptance: deterministic rules remain authoritative and model calls are metered.
 
-- [ ] **T05 Detect semantic duplicates** (`user-derived`)
+- [x] **T05 Detect semantic duplicates** (`user-derived`)
   - Combine normalized matching, embeddings, and model review for borderline cases.
   - Acceptance: paraphrases do not create redundant active Memory.
 

@@ -151,3 +151,12 @@ Memory 是持久化候选信息，Context 是某次模型调用临时选择出�
 - Pydantic 结构化输出把自由文本回答限制成固定字段，但它只保证形状正确，不保证事实正确。模型返回的 Memory ID 仍要回数据库核对。
 - Evaluator 失败不能拖垮主 AgentRun。fail-closed 会保留 Candidate 并标记 `needs_review`，而不是误存或静默丢弃。
 - 模型判断会增加 token 成本，所以 Candidate Journal 要记录调用次数、输入 token、输出 token 和模型版本，为后续 evals 比较质量与成本提供数据。
+
+## 15. 语义去重学习心得
+
+- “相似”不等于“重复”。Embedding 只能找出可能相关的候选，最终仍需规则或模型判断两句话表达的是同一事实、互相冲突，还是仅仅主题相近。
+- 去重适合使用漏斗架构：便宜的规范化匹配先处理明显重复，Embedding 从大量 Memory 中召回少量候选，模型只比较边界案例。
+- Candidate 与旧 Memory 的比较必须遵守 GoalContract、类型和作用域。否则一个任务的临时偏好可能错误删除另一个任务的独立记录。
+- 模型只能引用 Runtime 提供的候选 ID。即使结构化输出合法，引用不在候选集合中的 ID 仍是无效判断。
+- 重复和冲突的处理不同。重复 Candidate 不落库并指向已有 Memory；冲突 Candidate 保持待复核，直到版本与 supersede 规则决定哪条是当前事实。
+- SQLAlchemy `commit` 后对象属性可能过期。测试如果关闭 Session 后仍读取 ORM 对象，应提前保存稳定 ID 或重新查询，避免 `DetachedInstanceError`。

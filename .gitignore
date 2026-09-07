@@ -9,6 +9,7 @@ test_careerops.db
 test_careerops_checkpoints.db
 *.db-wal
 *.db-shm
+*.db-journal
 *.egg-info/
 .coverage
 htmlcov/

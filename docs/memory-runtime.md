@@ -91,6 +91,19 @@ Semantic Evaluator 使用 Pydantic 结构化输出，同时给出类型、长期
 
 每次语义判断将 Evaluator 版本、模型调用次数、输入 token 和输出 token 写入 Candidate Journal。默认自动运行路径仍不调用语义模型；只有显式注入 Evaluator 且规则给出 `semantic_evaluation_required` 时才付出这部分 token 成本。
 
+语义去重不会把全部 Memory 直接塞给模型。系统先按 GoalContract、类型、active 状态和作用域筛选，再执行以下漏斗：
+
+    规范化内容相等
+      -> 直接 reject，不调用 Embedding 和模型
+    Embedding 或词法相似度召回
+      -> 最多选择 8 条可能相关的 Memory
+    模型比较 Candidate 与召回结果
+      -> duplicate：reject，并记录已有 Memory ID
+      -> conflict：needs_review，不覆盖旧事实
+      -> related but different：继续按长期价值决定
+
+Embedding 适配器是可选依赖。没有配置时使用确定性词法 Jaccard 召回；配置 OpenAI Embedding 后会记录 `embedding_calls`、`embedding_tokens`、模型版本、候选 ID 和相似度。Embedding 只负责缩小比较范围，不能独立删除 Memory。召回失败时不会继续让模型凭空判断。
+
 Run 完成、审核结果、可选的 episodic memory 和 memory trace 在同一个数据库事务中提交。不会出现 Run 已标记完成，但审核记录丢失的半完成状态。
 
 ## 为什么不能读取全部记忆
@@ -137,6 +150,6 @@ Runtime Console 的 `MEMORY RUNTIME` 区域显示同一结果。它是预览，�
 - 字符预算只是 token 预算的确定性近似。
 - working memory 已有 task/run 作用域，并会在对应 Run/Task 终止时软退休；尚未实现自动总结和晋升。
 - Candidate Builder 目前支持 Run outcome 的 episodic 候选和结构化技能需求的 fact 候选；还没有模型驱动的自由文本 fact/preference 提取。
-- 当前审核已检查来源/作用域完整性、最小信息量、敏感值和精确重复，并提供可选语义重复、长期价值和冲突判断；尚未实现 `needs_review` 的人工处理动作和事实 supersede 链。
+- 当前审核已检查来源/作用域完整性、最小信息量、敏感值、规范化重复和可选 Embedding/模型语义重复；冲突目前进入 `needs_review`，尚未实现人工处理动作和事实 supersede 链。
 - Context Compaction 尚未实现；实现后 Runtime Console 必须同时展示压缩前输入、压缩后 Context、保留项和丢弃/摘要原因。
 - 尚未实现合并、冲突检测、遗忘和 context compaction。

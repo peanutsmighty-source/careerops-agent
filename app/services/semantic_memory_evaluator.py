@@ -6,9 +6,6 @@ from typing import Literal, Protocol, Sequence
 
 from pydantic import BaseModel, Field
 
-from app.models import AgentMemory
-
-
 class SemanticMemoryJudgment(BaseModel):
     decision: Literal["accept", "reject", "needs_review"]
     memory_type: Literal["working", "episodic", "fact"]
@@ -79,13 +76,3 @@ class OpenAISemanticMemoryEvaluator:
                 "completion_tokens": usage.output_tokens if usage else 0,
             },
         )
-
-
-def memory_context(memory: AgentMemory) -> dict:
-    return {
-        "id": memory.id,
-        "memory_type": memory.memory_type,
-        "scope_type": memory.scope_type,
-        "content": memory.content,
-        "source": memory.source,
-    }

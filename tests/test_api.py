@@ -10,6 +10,7 @@ from app.debug_cli import (
     show_call,
 )
 from app.models import (
+    AgentMemory,
     AgentRun,
     AgentRunStep,
     AgentTask,
@@ -31,6 +32,7 @@ from app.services.semantic_memory_evaluator import (
     SemanticEvaluationResult,
     SemanticMemoryJudgment,
 )
+from app.services.memory_similarity import EmbeddingBatch
 from app.services.tool_runtime import request_fingerprint
 
 
@@ -756,6 +758,30 @@ class FixedSemanticEvaluator:
         )
 
 
+class FixedEmbeddingProvider:
+    provider_version = "fake-embedding-v1"
+
+    def __init__(self, vectors):
+        self.vectors = vectors
+        self.call_count = 0
+
+    def embed(self, texts):
+        self.call_count += 1
+        assert len(texts) == len(self.vectors)
+        return EmbeddingBatch(
+            vectors=self.vectors,
+            provider_version=self.provider_version,
+            usage={"embedding_calls": 1, "embedding_tokens": 19},
+        )
+
+
+class FailingEmbeddingProvider:
+    provider_version = "fake-embedding-v1"
+
+    def embed(self, texts):
+        raise RuntimeError("embedding service unavailable")
+
+
 def test_semantic_evaluator_accepts_verified_user_input_and_records_usage(client):
     task_payload = client.post(
         "/agent/tasks",
@@ -810,11 +836,10 @@ def test_semantic_evaluator_accepts_verified_user_input_and_records_usage(client
         f"/agent/memory-candidates?task_id={task_payload['id']}"
     ).json()[0]
     assert record["evaluator_version"] == "fake-semantic-v1"
-    assert record["evaluator_usage"] == {
-        "model_calls": 1,
-        "prompt_tokens": 37,
-        "completion_tokens": 11,
-    }
+    assert record["evaluator_usage"]["model_calls"] == 1
+    assert record["evaluator_usage"]["prompt_tokens"] == 37
+    assert record["evaluator_usage"]["completion_tokens"] == 11
+    assert record["evaluator_usage"]["embedding_calls"] == 0
     assert record["evaluator_output"]["long_term_value"] == "high"
     assert record["evaluator_output"]["rationale"].startswith("This stable")
 
@@ -918,6 +943,237 @@ def test_model_cannot_invent_memory_references(client):
     assert evaluation.decision == "needs_review"
     assert evaluation.reasons == ("invalid_model_memory_reference",)
     assert evaluation.memory is None
+
+
+def test_embedding_shortlist_and_model_block_a_paraphrased_duplicate(client):
+    task_payload = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Deduplicate learning preferences",
+            "user_goal": "Explain architecture using concrete examples.",
+            "success_criteria": ["Equivalent preferences are stored once."],
+        },
+    ).json()
+
+    with Session(engine) as session:
+        task = session.get(AgentTask, task_payload["id"])
+        trace = session.query(ExecutionTrace).filter_by(
+            task_id=task.id, event_type="user_input"
+        ).one()
+        existing = AgentMemory(
+            goal_contract_id=task.goal_contract_id,
+            scope_type="task",
+            task_id=task.id,
+            run_id=None,
+            memory_type="fact",
+            memory_key="learning-style-original",
+            content="The user understands technical concepts best when explanations include examples.",
+            source="user_input",
+            importance=5,
+        )
+        unrelated = AgentMemory(
+            goal_contract_id=task.goal_contract_id,
+            scope_type="task",
+            task_id=task.id,
+            run_id=None,
+            memory_type="fact",
+            memory_key="target-role",
+            content="The target role is an Agent Engineer.",
+            source="user_input",
+            importance=5,
+        )
+        session.add_all([existing, unrelated])
+        session.flush()
+        existing_id = existing.id
+        existing_content = existing.content
+        evaluator = FixedSemanticEvaluator(
+            SemanticMemoryJudgment(
+                decision="reject",
+                memory_type="fact",
+                long_term_value="high",
+                semantic_duplicate_memory_id=existing_id,
+                rationale="The candidate paraphrases the existing learning preference.",
+            )
+        )
+        embedding_provider = FixedEmbeddingProvider(
+            [[1.0, 0.0], [0.99, 0.1], [0.0, 1.0]]
+        )
+        evaluation = evaluate_and_store_candidate(
+            session,
+            task,
+            MemoryCandidate(
+                memory_type="fact",
+                scope_type="task",
+                task_id=task.id,
+                run_id=None,
+                memory_key="learning-style-paraphrase",
+                content="Use examples when teaching me difficult architecture.",
+                source="user_input",
+                importance=5,
+                relevance_text="Explain architecture using concrete examples.",
+                provenance={
+                    "execution_trace_id": trace.id,
+                    "task_id": task.id,
+                    "evidence_text": "Explain architecture using concrete examples.",
+                },
+            ),
+            semantic_evaluator=evaluator,
+            embedding_provider=embedding_provider,
+        )
+        session.commit()
+
+    assert embedding_provider.call_count == 1
+    assert evaluator.call_count == 1
+    assert evaluation.decision == "reject"
+    assert evaluation.reasons == ("semantic_duplicate",)
+    assert evaluation.duplicate_memory_id == existing_id
+    assert evaluation.evaluator_usage["embedding_tokens"] == 19
+    similarity_candidates = evaluation.evaluator_output["similarity_search"]["candidates"]
+    assert len(similarity_candidates) == 1
+    assert similarity_candidates[0]["id"] == existing_id
+    assert similarity_candidates[0]["content"] == existing_content
+    assert similarity_candidates[0]["similarity_score"] > 0.99
+    memories = client.get("/agent/memories?memory_type=fact").json()
+    assert {memory["memory_key"] for memory in memories} == {
+        "learning-style-original",
+        "target-role",
+    }
+
+
+def test_normalized_duplicate_skips_embedding_and_model(client):
+    task_payload = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Normalize duplicate text",
+            "user_goal": "Use examples when explaining Agent architecture.",
+            "success_criteria": ["Punctuation variants are stored once."],
+        },
+    ).json()
+    evaluator = FixedSemanticEvaluator(
+        SemanticMemoryJudgment(
+            decision="accept",
+            memory_type="fact",
+            long_term_value="high",
+            rationale="This should not be reached.",
+        )
+    )
+    embedding_provider = FixedEmbeddingProvider([[1.0], [1.0]])
+
+    with Session(engine) as session:
+        task = session.get(AgentTask, task_payload["id"])
+        trace = session.query(ExecutionTrace).filter_by(
+            task_id=task.id, event_type="user_input"
+        ).one()
+        session.add(
+            AgentMemory(
+                goal_contract_id=task.goal_contract_id,
+                scope_type="task",
+                task_id=task.id,
+                run_id=None,
+                memory_type="fact",
+                memory_key="normalized-original",
+                content="Use examples when explaining Agent architecture!",
+                source="user_input",
+                importance=5,
+            )
+        )
+        session.flush()
+        evaluation = evaluate_and_store_candidate(
+            session,
+            task,
+            MemoryCandidate(
+                memory_type="fact",
+                scope_type="task",
+                task_id=task.id,
+                run_id=None,
+                memory_key="normalized-copy",
+                content="Use examples when explaining Agent architecture.",
+                source="user_input",
+                importance=5,
+                relevance_text="Use examples when explaining Agent architecture.",
+                provenance={
+                    "execution_trace_id": trace.id,
+                    "task_id": task.id,
+                    "evidence_text": "Use examples when explaining Agent architecture.",
+                },
+            ),
+            semantic_evaluator=evaluator,
+            embedding_provider=embedding_provider,
+        )
+
+    assert evaluation.decision == "reject"
+    assert evaluation.reasons == ("duplicate_content",)
+    assert evaluator.call_count == 0
+    assert embedding_provider.call_count == 0
+
+
+def test_embedding_failure_stops_before_model_and_is_metered(client):
+    task_payload = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Handle embedding failure",
+            "user_goal": "Keep ambiguous memory candidates safe when retrieval fails.",
+            "success_criteria": ["Do not call the model without a trusted shortlist."],
+        },
+    ).json()
+    evaluator = FixedSemanticEvaluator(
+        SemanticMemoryJudgment(
+            decision="accept",
+            memory_type="fact",
+            long_term_value="high",
+            rationale="This should not be reached.",
+        )
+    )
+
+    with Session(engine) as session:
+        task = session.get(AgentTask, task_payload["id"])
+        trace = session.query(ExecutionTrace).filter_by(
+            task_id=task.id, event_type="user_input"
+        ).one()
+        session.add(
+            AgentMemory(
+                goal_contract_id=task.goal_contract_id,
+                scope_type="task",
+                task_id=task.id,
+                run_id=None,
+                memory_type="fact",
+                memory_key="retrieval-reference",
+                content="A sufficiently detailed existing memory for retrieval.",
+                source="user_input",
+                importance=4,
+            )
+        )
+        session.flush()
+        evaluation = evaluate_and_store_candidate(
+            session,
+            task,
+            MemoryCandidate(
+                memory_type="fact",
+                scope_type="task",
+                task_id=task.id,
+                run_id=None,
+                memory_key="retrieval-failure",
+                content="A different detailed candidate that needs semantic comparison.",
+                source="user_input",
+                importance=4,
+                relevance_text="Keep ambiguous memory candidates safe when retrieval fails.",
+                provenance={
+                    "execution_trace_id": trace.id,
+                    "task_id": task.id,
+                    "evidence_text": (
+                        "Keep ambiguous memory candidates safe when retrieval fails."
+                    ),
+                },
+            ),
+            semantic_evaluator=evaluator,
+            embedding_provider=FailingEmbeddingProvider(),
+        )
+
+    assert evaluation.decision == "needs_review"
+    assert evaluation.reasons == ("similarity_search_failed",)
+    assert evaluation.evaluator_usage["embedding_calls"] == 1
+    assert evaluation.evaluator_usage["model_calls"] == 0
+    assert evaluator.call_count == 0
 
 
 def test_run_completion_retires_run_scoped_working_memory(client):

@@ -18,7 +18,11 @@ from app.models import (
 from app.services.semantic_memory_evaluator import (
     SemanticEvaluationResult,
     SemanticMemoryEvaluator,
-    memory_context,
+)
+from app.services.memory_similarity import (
+    MemoryEmbeddingProvider,
+    SimilaritySearchResult,
+    rank_similar_memories,
 )
 
 
@@ -93,6 +97,7 @@ def evaluate_and_store_candidate(
     candidate: MemoryCandidate,
     *,
     semantic_evaluator: SemanticMemoryEvaluator | None = None,
+    embedding_provider: MemoryEmbeddingProvider | None = None,
 ) -> MemoryEvaluation:
     existing = session.scalar(
         select(AgentMemory).where(
@@ -108,7 +113,11 @@ def evaluate_and_store_candidate(
         and semantic_evaluator is not None
     ):
         rule_evaluation = _evaluate_semantics(
-            session, task, rule_evaluation, semantic_evaluator
+            session,
+            task,
+            rule_evaluation,
+            semantic_evaluator,
+            embedding_provider=embedding_provider,
         )
 
     if rule_evaluation.decision == "accept" and existing:
@@ -360,16 +369,45 @@ def _evaluate_semantics(
     task: AgentTask,
     rule_evaluation: MemoryEvaluation,
     evaluator: SemanticMemoryEvaluator,
+    *,
+    embedding_provider: MemoryEmbeddingProvider | None,
 ) -> MemoryEvaluation:
     candidate = rule_evaluation.candidate
-    memories = list(
+    active_memories = list(
         session.scalars(
             select(AgentMemory).where(
                 AgentMemory.goal_contract_id == task.goal_contract_id,
+                AgentMemory.memory_type == candidate.memory_type,
                 AgentMemory.status == "active",
             )
         )
     )
+    memories = [
+        memory for memory in active_memories if _scopes_overlap(candidate, memory)
+    ]
+    try:
+        similarity = rank_similar_memories(
+            candidate.content,
+            memories,
+            embedding_provider=embedding_provider,
+        )
+    except Exception:
+        provider_version = (
+            embedding_provider.provider_version if embedding_provider else "lexical"
+        )
+        return replace(
+            rule_evaluation,
+            reasons=("similarity_search_failed",),
+            evaluator_version=f"{provider_version}:failed",
+            evaluator_usage={
+                "model_calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "embedding_calls": 1 if embedding_provider else 0,
+                "embedding_tokens": 0,
+            },
+            evaluator_output={"status": "similarity_search_failed"},
+        )
     try:
         result = evaluator.evaluate(
             candidate={
@@ -379,38 +417,52 @@ def _evaluate_semantics(
                 "source": candidate.source,
                 "importance": candidate.importance,
             },
-            existing_memories=[memory_context(memory) for memory in memories],
+            existing_memories=similarity.contexts(),
         )
     except Exception:
+        usage = dict(similarity.usage)
+        usage.update(
+            {
+                "model_calls": 1,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            }
+        )
         return replace(
             rule_evaluation,
             reasons=("semantic_evaluator_failed",),
             evaluator_version=f"{evaluator.evaluator_version}:failed",
-            evaluator_usage={
-                "model_calls": 1,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-            },
+            evaluator_usage=usage,
             evaluator_output={"status": "failed"},
         )
-    return _apply_semantic_result(rule_evaluation, result, memories)
+    return _apply_semantic_result(rule_evaluation, result, similarity)
 
 
 def _apply_semantic_result(
     rule_evaluation: MemoryEvaluation,
     result: SemanticEvaluationResult,
-    memories: list[AgentMemory],
+    similarity: SimilaritySearchResult,
 ) -> MemoryEvaluation:
     candidate = rule_evaluation.candidate
     judgment = result.judgment
-    known_ids = {memory.id for memory in memories}
+    known_ids = {item.memory.id for item in similarity.candidates}
     referenced_ids = set(judgment.conflict_memory_ids)
     if judgment.semantic_duplicate_memory_id:
         referenced_ids.add(judgment.semantic_duplicate_memory_id)
+    usage = dict(similarity.usage)
+    for key, value in result.usage.items():
+        usage[key] = usage.get(key, 0) + value
     common = {
         "evaluator_version": result.evaluator_version,
-        "evaluator_usage": result.usage,
-        "evaluator_output": judgment.model_dump(),
+        "evaluator_usage": usage,
+        "evaluator_output": {
+            **judgment.model_dump(),
+            "similarity_search": {
+                "method": similarity.method,
+                "provider_version": similarity.provider_version,
+                "candidates": similarity.contexts(),
+            },
+        },
     }
     if not referenced_ids.issubset(known_ids):
         return replace(
@@ -498,11 +550,11 @@ def _find_duplicate(
     session: Session, task: AgentTask, candidate: MemoryCandidate
 ) -> AgentMemory | None:
     candidate_answer = _normalized(candidate.relevance_text)
+    candidate_canonical = _canonical(candidate.content)
     memories = session.scalars(
         select(AgentMemory).where(
             AgentMemory.goal_contract_id == task.goal_contract_id,
             AgentMemory.memory_type == candidate.memory_type,
-            AgentMemory.source == candidate.source,
             AgentMemory.scope_type == candidate.scope_type,
             AgentMemory.task_id == candidate.task_id,
             AgentMemory.run_id == candidate.run_id,
@@ -510,10 +562,31 @@ def _find_duplicate(
     )
     for memory in memories:
         existing = _normalized(memory.content)
-        if existing == _normalized(candidate.content) or existing.endswith(candidate_answer):
+        if (
+            existing == _normalized(candidate.content)
+            or existing.endswith(candidate_answer)
+            or (
+                candidate_canonical
+                and _canonical(memory.content) == candidate_canonical
+            )
+        ):
             return memory
     return None
 
 
 def _normalized(value: str) -> str:
     return WHITESPACE_PATTERN.sub(" ", value).strip().casefold()
+
+
+def _canonical(value: str) -> str:
+    return "".join(character for character in _normalized(value) if character.isalnum())
+
+
+def _scopes_overlap(candidate: MemoryCandidate, memory: AgentMemory) -> bool:
+    if candidate.scope_type == "contract":
+        return memory.scope_type == "contract"
+    if candidate.scope_type == "task":
+        return memory.scope_type == "contract" or (
+            memory.scope_type == "task" and memory.task_id == candidate.task_id
+        )
+    return memory.scope_type == "run" and memory.run_id == candidate.run_id
