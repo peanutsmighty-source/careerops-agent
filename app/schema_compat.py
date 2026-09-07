@@ -95,3 +95,21 @@ def ensure_memory_candidate_columns(engine: Engine) -> None:
         connection.execute(
             text("ALTER TABLE memory_candidates ADD COLUMN evaluator_output JSON")
         )
+
+
+def ensure_agent_timing_columns(engine: Engine) -> None:
+    """Add runtime timing payloads to existing SQLite development databases."""
+    missing_by_table = {}
+    for table_name in ("agent_runs", "agent_run_steps"):
+        columns = {column["name"] for column in inspect(engine).get_columns(table_name)}
+        if "timing_json" not in columns:
+            missing_by_table[table_name] = "timing_json"
+    if not missing_by_table:
+        return
+    if engine.dialect.name != "sqlite":
+        raise RuntimeError("agent runtime timing columns require a database migration")
+    with engine.begin() as connection:
+        for table_name in missing_by_table:
+            connection.execute(
+                text(f"ALTER TABLE {table_name} ADD COLUMN timing_json JSON")
+            )

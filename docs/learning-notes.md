@@ -170,3 +170,10 @@ Memory 是持久化候选信息，Context 是某次模型调用临时选择出�
 - 单元测试应模拟 SDK 响应，验证协议转换而不产生费用；真实连通测试单独执行，并且不能打印请求头或密钥。
 - 最小真实连通测试已创建 `AgentRun #14`：模型返回了 `get_skill_demand` 工具调用，并记录 token 用量。它证明网络、鉴权、协议转换和结果解析可以协同工作，但不代表完整业务链路已经验证。
 - “允许使用某个模型 API”和“允许把哪些项目数据发送给该模型”是两种权限。完整运行会外发 task goal、Memory Context 和 tool observations，因此 Harness 还需要显式的数据出站策略，而不能只检查 API key 是否存在。
+
+## 17. Agent Runtime 分阶段耗时
+
+- Run 总耗时只能说明“整轮慢”，不能说明慢在模型、Context、工具还是 Memory Evaluator。性能定位需要分阶段计时并使用同一个 run ID、step ID 关联。
+- 每个 AgentRunStep 记录 Context 装配、请求构造、模型调用、工具调用和 Step 总耗时；AgentRun 汇总所有 Step，并额外记录 Memory 收尾和无法归因的 wall-clock 时间。
+- unattributed_ms 不是错误，它包含数据库提交、调度、恢复间隔以及尚未单独埋点的代码。该值异常大时，说明应该继续增加 span，而不是武断地归因给模型。
+- 失败 Run 记录 failed_phase。例如 model_call 表示异常发生在等待或解析模型响应期间，而不是工具 handler。

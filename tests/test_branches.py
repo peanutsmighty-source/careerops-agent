@@ -219,6 +219,8 @@ def test_agent_loop_records_invalid_model_action_as_failed_run(client):
         assert run.status == "failed"
         assert run.stop_reason == "runtime_error"
         assert "unsupported model action" in run.error
+        assert run.timing_json["failed_phase"] == "decision_validation"
+        assert run.timing_json["wall_clock_ms"] >= 0
 
 
 def test_agent_loop_returns_unknown_tool_error_to_the_model_as_observation(client):

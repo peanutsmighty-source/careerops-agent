@@ -1640,6 +1640,18 @@ def test_agent_loop_stops_at_the_server_side_step_limit(client):
     assert run["step_count"] == 1
     assert len(run["steps"]) == 1
     assert run["steps"][0]["tool_call_id"] is not None
+    assert run["timing_json"]["wall_clock_ms"] >= 0
+    assert run["timing_json"]["model_call_ms"] >= 0
+    assert run["timing_json"]["tool_call_ms"] >= 0
+    assert run["steps"][0]["timing_json"]["context_assembly_ms"] >= 0
+    assert run["steps"][0]["timing_json"]["model_call_ms"] >= 0
+    traces = client.get(f"/agent/tasks/{task['id']}/traces").json()
+    model_trace = next(trace for trace in traces if trace["event_type"] == "model_call")
+    tool_trace = next(trace for trace in traces if trace["event_type"] == "tool_call")
+    run_trace = next(trace for trace in traces if trace["event_type"] == "agent_run")
+    assert model_trace["metadata_json"]["timing"]["model_call_ms"] >= 0
+    assert tool_trace["metadata_json"]["agent_run_id"] == run["id"]
+    assert run_trace["metadata_json"]["timing"]["wall_clock_ms"] >= 0
     checkpoints = client.get(
         f"/agent/tasks/{task['id']}/agent-runs/{run['id']}/checkpoints"
     ).json()

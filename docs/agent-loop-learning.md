@@ -105,7 +105,21 @@ AgentRunStep 保存 Node 内部每次模型决定和 observation。Graph State �
 
 AgentRun Recovery 现在会根据最后一个完整 Step、ToolCall 状态和外层 checkpoint 判断继续执行、恢复 observation 或转人工处理。成功恢复内部 Loop 后，还会继续同一个外层 Workflow thread。
 
-## 9. 当前限制
+## 9. 分阶段耗时怎样定位慢请求
+
+每个 AgentRunStep 的 timing_json 会记录：
+
+- context_assembly_ms：筛选和装配本轮 Memory Context。
+- request_build_ms：读取任务、策略、工具和 Context，形成完整模型请求。
+- model_call_ms：等待模型返回并解析结果。
+- tool_call_ms：从进入 Tool Runtime 到获得 observation 的总时间。
+- step_total_ms：这个 Step 已知阶段的总时间。
+
+AgentRun 的 timing_json 会汇总所有 Step，并增加 memory_finalize_ms、wall_clock_ms 和 unattributed_ms。wall-clock 包含中断和等待，unattributed 是 wall-clock 减去已知阶段后的剩余时间。如果 model_call_ms 很大，应检查供应商延迟、推理配置和 token 数；如果 tool_call_ms 很大而 ToolCall.duration_ms 很小，应检查鉴权、事务或连接；如果 unattributed_ms 很大，应检查调度、恢复间隔或缺少埋点的阶段。
+
+失败 Run 还会记录 failed_phase。它不能保证在设备瞬间断电时写入，因为进程已经没有机会执行写库；这种情况由仍处于 running 的 Run、最后一个持久化 Step 和恢复扫描共同判断。
+
+## 10. 当前限制
 
 - Agent Loop 仍是同步执行，长耗时模型调用之后应移入 worker。
 - Recovery 目前手动触发，尚无启动扫描、worker lease 和多实例互斥。

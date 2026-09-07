@@ -398,6 +398,7 @@ class AgentRunStepRead(BaseModel):
     model_response: dict
     tool_call_id: int | None
     observation: dict | None
+    timing_json: dict | None
     created_at: datetime
 
 
@@ -414,6 +415,7 @@ class AgentRunRead(BaseModel):
     final_answer: str | None
     stop_reason: str | None
     error: str | None
+    timing_json: dict | None
     steps: list[AgentRunStepRead]
     created_at: datetime
     started_at: datetime

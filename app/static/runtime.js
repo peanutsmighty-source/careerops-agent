@@ -78,6 +78,13 @@ function statusText(status) {
   }[status] || status;
 }
 
+function formatDuration(milliseconds) {
+  if (milliseconds === null || milliseconds === undefined) return "计时中";
+  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+  if (milliseconds < 60000) return `${(milliseconds / 1000).toFixed(1)} s`;
+  return `${(milliseconds / 60000).toFixed(1)} min`;
+}
+
 function showToast(message) {
   elements.toast.textContent = message;
   elements.toast.classList.add("is-visible");
@@ -271,7 +278,10 @@ function renderAgentRuns() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `agent-run-item${run.id === state.selectedAgentRun?.id ? " is-active" : ""}`;
-    button.innerHTML = `<strong>#${run.id} · ${escapeHtml(run.provider)} / ${escapeHtml(run.model)}</strong><span>${escapeHtml(run.status)} · ${run.step_count}/${run.max_steps} steps</span>`;
+    const duration = run.timing_json
+      ? formatDuration(run.timing_json.wall_clock_ms)
+      : (run.status === "running" ? "计时中" : "无历史耗时");
+    button.innerHTML = `<strong>#${run.id} · ${escapeHtml(run.provider)} / ${escapeHtml(run.model)}</strong><span>${escapeHtml(run.status)} · ${run.step_count}/${run.max_steps} steps · ${duration}</span>`;
     button.addEventListener("click", () => selectAgentRun(run));
     elements["agent-run-list"].append(button);
   }

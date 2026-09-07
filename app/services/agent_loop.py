@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from time import perf_counter
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Protocol
@@ -260,6 +261,7 @@ class AgentLoopEngine:
         self.model = model
         self.session_factory = session_factory
         self.tool_runner = tool_runner
+        self._active_phase = "initialization"
 
     def run(self, run_id: int) -> None:
         try:
@@ -292,15 +294,25 @@ class AgentLoopEngine:
             self._stop_at_limit(run_id)
             return
         while True:
-            request = self._build_request(run_id)
-            if request is None:
+            self._active_phase = "request_build"
+            built = self._build_request(run_id)
+            if built is None:
                 return
+            request, timing = built
+            self._active_phase = "model_call"
+            model_started = perf_counter()
             decision = self.model.decide(request)
+            timing["model_call_ms"] = _elapsed_ms(model_started)
+            self._active_phase = "decision_validation"
             self._validate_decision(decision)
-            step_id = self._record_model_decision(run_id, request, decision)
+            step_id = self._record_model_decision(
+                run_id, request, decision, timing=timing
+            )
             if decision.action_type == "final_answer":
+                self._active_phase = "memory_finalize"
                 self._complete_run(run_id, decision.content or "")
                 return
+            self._active_phase = "tool_call"
             self._execute_tool(run_id, step_id, decision)
             if self._step_limit_reached(run_id):
                 self._stop_at_limit(run_id)
@@ -325,7 +337,10 @@ class AgentLoopEngine:
         self._complete_run(run_id, answer)
         return True
 
-    def _build_request(self, run_id: int) -> AgentModelRequest | None:
+    def _build_request(
+        self, run_id: int
+    ) -> tuple[AgentModelRequest, dict[str, float]] | None:
+        request_started = perf_counter()
         with self.session_factory() as session:
             run = session.get(AgentRun, run_id)
             if not run:
@@ -337,10 +352,12 @@ class AgentLoopEngine:
                 raise ValueError("agent task no longer exists")
             observations = [step.observation for step in run.steps if step.observation is not None]
             policy = get_or_create_task_policy(session, task)
+            context_started = perf_counter()
             memory_context = assemble_memory_context(session, task, run_id=run.id)
+            context_assembly_ms = _elapsed_ms(context_started)
             allowed = set(policy.allowed_tools)
             tools = [tool for tool in list_tools() if tool["name"] in allowed]
-            return AgentModelRequest(
+            request = AgentModelRequest(
                 task_id=task.id,
                 user_goal=task.user_goal,
                 constraints=task.constraints,
@@ -351,6 +368,10 @@ class AgentLoopEngine:
                 step_number=run.step_count + 1,
                 max_steps=run.max_steps,
             )
+            return request, {
+                "context_assembly_ms": context_assembly_ms,
+                "request_build_ms": _elapsed_ms(request_started),
+            }
 
     @staticmethod
     def _validate_decision(decision: AgentDecision) -> None:
@@ -362,13 +383,24 @@ class AgentLoopEngine:
             raise ValueError("tool_call action requires tool_name and arguments")
 
     def _record_model_decision(
-        self, run_id: int, request: AgentModelRequest, decision: AgentDecision
+        self,
+        run_id: int,
+        request: AgentModelRequest,
+        decision: AgentDecision,
+        *,
+        timing: dict[str, float],
     ) -> int:
         with self.session_factory() as session:
             run = session.get(AgentRun, run_id)
             if not run or run.status != "running":
                 raise ValueError("agent run is not running")
             sequence = run.step_count + 1
+            step_timing = {
+                **timing,
+                "step_total_ms": round(
+                    timing["request_build_ms"] + timing["model_call_ms"], 3
+                ),
+            }
             step = AgentRunStep(
                 run_id=run.id,
                 task_id=run.task_id,
@@ -376,6 +408,7 @@ class AgentLoopEngine:
                 action_type=decision.action_type,
                 model_request=request.as_dict(),
                 model_response=decision.as_dict(),
+                timing_json=step_timing,
             )
             run.step_count = sequence
             session.add(step)
@@ -396,6 +429,7 @@ class AgentLoopEngine:
                         "provider": run.provider,
                         "model": run.model,
                         "action": decision.as_dict(),
+                        "timing": step_timing,
                     },
                 )
             )
@@ -404,6 +438,8 @@ class AgentLoopEngine:
             return step.id
 
     def _execute_tool(self, run_id: int, step_id: int, decision: AgentDecision) -> None:
+        tool_started = perf_counter()
+        tool_trace_id = None
         with self.session_factory() as session:
             run = session.get(AgentRun, run_id)
             step = session.get(AgentRunStep, step_id)
@@ -431,6 +467,7 @@ class AgentLoopEngine:
                     serialize_tool_call(outcome.record, replayed=outcome.replayed)
                 )
                 step.tool_call_id = outcome.record.id
+                tool_trace_id = outcome.record.trace_id
             except Exception as exc:
                 session.rollback()
                 step = session.get(AgentRunStep, step_id)
@@ -441,6 +478,24 @@ class AgentLoopEngine:
                     "error": str(exc),
                 }
             step.observation = observation
+            timing = dict(step.timing_json or {})
+            timing["tool_call_ms"] = _elapsed_ms(tool_started)
+            timing["step_total_ms"] = round(
+                timing.get("request_build_ms", 0)
+                + timing.get("model_call_ms", 0)
+                + timing["tool_call_ms"],
+                3,
+            )
+            step.timing_json = timing
+            if tool_trace_id:
+                trace = session.get(ExecutionTrace, tool_trace_id)
+                if trace:
+                    trace.metadata_json = {
+                        **(trace.metadata_json or {}),
+                        "agent_run_id": run.id,
+                        "agent_run_step_id": step.id,
+                        "sequence": step.sequence,
+                    }
             session.commit()
 
     def _step_limit_reached(self, run_id: int) -> bool:
@@ -451,6 +506,7 @@ class AgentLoopEngine:
             return run.step_count >= run.max_steps
 
     def _complete_run(self, run_id: int, answer: str) -> None:
+        finalize_started = perf_counter()
         with self.session_factory() as session:
             run = session.get(AgentRun, run_id)
             if not run:
@@ -458,7 +514,6 @@ class AgentLoopEngine:
             run.status = "completed"
             run.final_answer = answer
             run.stop_reason = "final_answer"
-            run.completed_at = datetime.utcnow()
             memory_evaluations = evaluate_and_store_run_memories(session, run, answer=answer)
             memories = [evaluation.memory for evaluation in memory_evaluations if evaluation.memory]
             episodic_memory = next(
@@ -474,6 +529,8 @@ class AgentLoopEngine:
                 run_id=run.id,
                 reason="agent_run_completed",
             )
+            memory_finalize_ms = _elapsed_ms(finalize_started)
+            _finalize_run_timing(run, memory_finalize_ms=memory_finalize_ms)
             for evaluation in memory_evaluations:
                 memory = evaluation.memory
                 candidate = evaluation.candidate
@@ -532,6 +589,7 @@ class AgentLoopEngine:
                             for evaluation in memory_evaluations
                         ],
                         "retired_working_memory_ids": retired_memory_ids,
+                        "timing": run.timing_json,
                     },
                 )
             )
@@ -550,6 +608,7 @@ class AgentLoopEngine:
                 run_id=run.id,
                 reason="agent_run_max_steps",
             )
+            _finalize_run_timing(run)
             session.add(
                 ExecutionTrace(
                     task_id=run.task_id,
@@ -561,6 +620,7 @@ class AgentLoopEngine:
                         "agent_run_id": run.id,
                         "max_steps": run.max_steps,
                         "retired_working_memory_ids": retired_memory_ids,
+                        "timing": run.timing_json,
                     },
                 )
             )
@@ -574,12 +634,12 @@ class AgentLoopEngine:
             run.status = "failed"
             run.stop_reason = "runtime_error"
             run.error = f"{type(exc).__name__}: {exc}"
-            run.completed_at = datetime.utcnow()
             retired_memory_ids = retire_run_working_memories(
                 session,
                 run_id=run.id,
                 reason="agent_run_failed",
             )
+            _finalize_run_timing(run, failed_phase=self._active_phase)
             session.add(
                 ExecutionTrace(
                     task_id=run.task_id,
@@ -590,10 +650,53 @@ class AgentLoopEngine:
                     metadata_json={
                         "agent_run_id": run.id,
                         "retired_working_memory_ids": retired_memory_ids,
+                        "timing": run.timing_json,
                     },
                 )
             )
             session.commit()
+
+
+def _elapsed_ms(started: float) -> float:
+    return round((perf_counter() - started) * 1000, 3)
+
+
+def _finalize_run_timing(
+    run: AgentRun,
+    *,
+    memory_finalize_ms: float = 0,
+    failed_phase: str | None = None,
+) -> None:
+    run.completed_at = datetime.utcnow()
+    step_timings = [step.timing_json or {} for step in run.steps]
+    request_build_ms = round(
+        sum(item.get("request_build_ms", 0) for item in step_timings), 3
+    )
+    context_assembly_ms = round(
+        sum(item.get("context_assembly_ms", 0) for item in step_timings), 3
+    )
+    model_call_ms = round(
+        sum(item.get("model_call_ms", 0) for item in step_timings), 3
+    )
+    tool_call_ms = round(
+        sum(item.get("tool_call_ms", 0) for item in step_timings), 3
+    )
+    wall_clock_ms = round(
+        max((run.completed_at - run.started_at).total_seconds() * 1000, 0), 3
+    )
+    attributed_ms = request_build_ms + model_call_ms + tool_call_ms + memory_finalize_ms
+    timing = {
+        "wall_clock_ms": wall_clock_ms,
+        "context_assembly_ms": context_assembly_ms,
+        "request_build_ms": request_build_ms,
+        "model_call_ms": model_call_ms,
+        "tool_call_ms": tool_call_ms,
+        "memory_finalize_ms": memory_finalize_ms,
+        "unattributed_ms": round(max(wall_clock_ms - attributed_ms, 0), 3),
+    }
+    if failed_phase:
+        timing["failed_phase"] = failed_phase
+    run.timing_json = timing
 
 
 def json_safe(value):
