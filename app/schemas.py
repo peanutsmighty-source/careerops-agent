@@ -152,6 +152,7 @@ class MemoryCandidateRead(BaseModel):
     reasons: list[str]
     evaluator_version: str
     evaluator_usage: dict | None
+    evaluator_output: dict | None
     created_at: datetime
     updated_at: datetime
 

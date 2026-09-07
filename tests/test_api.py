@@ -13,6 +13,7 @@ from app.models import (
     AgentRun,
     AgentRunStep,
     AgentTask,
+    ExecutionTrace,
     Job,
     JobRequirement,
     PlanStep,
@@ -26,6 +27,10 @@ from app.services.agent_loop import (
     create_agent_run,
 )
 from app.services.memory_evaluator import MemoryCandidate, evaluate_and_store_candidate
+from app.services.semantic_memory_evaluator import (
+    SemanticEvaluationResult,
+    SemanticMemoryJudgment,
+)
 from app.services.tool_runtime import request_fingerprint
 
 
@@ -733,6 +738,186 @@ def test_untrusted_candidate_requires_review_and_forged_provenance_is_rejected(c
     )
     assert forged_record["source_run_id"] is None
     assert forged_record["provenance"]["agent_run_id"] == 999999
+
+
+class FixedSemanticEvaluator:
+    evaluator_version = "fake-semantic-v1"
+
+    def __init__(self, judgment: SemanticMemoryJudgment):
+        self.judgment = judgment
+        self.call_count = 0
+
+    def evaluate(self, *, candidate, existing_memories):
+        self.call_count += 1
+        return SemanticEvaluationResult(
+            judgment=self.judgment,
+            evaluator_version=self.evaluator_version,
+            usage={"model_calls": 1, "prompt_tokens": 37, "completion_tokens": 11},
+        )
+
+
+def test_semantic_evaluator_accepts_verified_user_input_and_records_usage(client):
+    task_payload = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Remember a learning preference",
+            "user_goal": "Teach me agent architecture with concrete examples.",
+            "success_criteria": ["Future explanations use examples."],
+        },
+    ).json()
+    evaluator = FixedSemanticEvaluator(
+        SemanticMemoryJudgment(
+            decision="accept",
+            memory_type="fact",
+            long_term_value="high",
+            rationale="This stable teaching preference should guide future explanations.",
+        )
+    )
+
+    with Session(engine) as session:
+        task = session.get(AgentTask, task_payload["id"])
+        trace = session.query(ExecutionTrace).filter_by(
+            task_id=task.id, event_type="user_input"
+        ).one()
+        evaluation = evaluate_and_store_candidate(
+            session,
+            task,
+            MemoryCandidate(
+                memory_type="fact",
+                scope_type="task",
+                task_id=task.id,
+                run_id=None,
+                memory_key="teaching-style",
+                content="The user learns agent architecture best through concrete examples.",
+                source="user_input",
+                importance=5,
+                relevance_text="Teach me agent architecture with concrete examples.",
+                provenance={
+                    "execution_trace_id": trace.id,
+                    "task_id": task.id,
+                    "evidence_text": "Teach me agent architecture with concrete examples.",
+                },
+            ),
+            semantic_evaluator=evaluator,
+        )
+        session.commit()
+
+    assert evaluator.call_count == 1
+    assert evaluation.decision == "accept"
+    assert evaluation.storage_action == "stored"
+    assert evaluation.evaluator_usage["prompt_tokens"] == 37
+    record = client.get(
+        f"/agent/memory-candidates?task_id={task_payload['id']}"
+    ).json()[0]
+    assert record["evaluator_version"] == "fake-semantic-v1"
+    assert record["evaluator_usage"] == {
+        "model_calls": 1,
+        "prompt_tokens": 37,
+        "completion_tokens": 11,
+    }
+    assert record["evaluator_output"]["long_term_value"] == "high"
+    assert record["evaluator_output"]["rationale"].startswith("This stable")
+
+
+def test_deterministic_reject_does_not_call_semantic_evaluator(client):
+    task_payload = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Protect credentials",
+            "user_goal": "Never store credentials in memory candidates.",
+            "success_criteria": ["Sensitive values are rejected before model evaluation."],
+        },
+    ).json()
+    evaluator = FixedSemanticEvaluator(
+        SemanticMemoryJudgment(
+            decision="accept",
+            memory_type="fact",
+            long_term_value="high",
+            rationale="The fake model would accept this.",
+        )
+    )
+
+    with Session(engine) as session:
+        task = session.get(AgentTask, task_payload["id"])
+        trace = session.query(ExecutionTrace).filter_by(
+            task_id=task.id, event_type="user_input"
+        ).one()
+        evaluation = evaluate_and_store_candidate(
+            session,
+            task,
+            MemoryCandidate(
+                memory_type="fact",
+                scope_type="task",
+                task_id=task.id,
+                run_id=None,
+                memory_key="secret",
+                content="The API key=sk-examplecredential123456 should never be stored.",
+                source="user_input",
+                importance=5,
+                relevance_text="The API key=sk-examplecredential123456 should never be stored.",
+                provenance={
+                    "execution_trace_id": trace.id,
+                    "task_id": task.id,
+                    "evidence_text": "Never store credentials in memory candidates.",
+                },
+            ),
+            semantic_evaluator=evaluator,
+        )
+
+    assert evaluation.decision == "reject"
+    assert evaluation.reasons == ("contains_sensitive_value",)
+    assert evaluator.call_count == 0
+
+
+def test_model_cannot_invent_memory_references(client):
+    task_payload = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Validate semantic references",
+            "user_goal": "Only trust IDs supplied to the semantic evaluator.",
+            "success_criteria": ["Invented IDs remain under review."],
+        },
+    ).json()
+    evaluator = FixedSemanticEvaluator(
+        SemanticMemoryJudgment(
+            decision="reject",
+            memory_type="fact",
+            long_term_value="medium",
+            semantic_duplicate_memory_id=999999,
+            rationale="Claims a duplicate that was not supplied.",
+        )
+    )
+
+    with Session(engine) as session:
+        task = session.get(AgentTask, task_payload["id"])
+        trace = session.query(ExecutionTrace).filter_by(
+            task_id=task.id, event_type="user_input"
+        ).one()
+        evaluation = evaluate_and_store_candidate(
+            session,
+            task,
+            MemoryCandidate(
+                memory_type="fact",
+                scope_type="task",
+                task_id=task.id,
+                run_id=None,
+                memory_key="validated-reference",
+                content="Only supplied database identifiers may influence memory decisions.",
+                source="user_input",
+                importance=4,
+                relevance_text="Only trust IDs supplied to the semantic evaluator.",
+                provenance={
+                    "execution_trace_id": trace.id,
+                    "task_id": task.id,
+                    "evidence_text": "Only trust IDs supplied to the semantic evaluator.",
+                },
+            ),
+            semantic_evaluator=evaluator,
+        )
+
+    assert evaluation.decision == "needs_review"
+    assert evaluation.reasons == ("invalid_model_memory_reference",)
+    assert evaluation.memory is None
 
 
 def test_run_completion_retires_run_scoped_working_memory(client):

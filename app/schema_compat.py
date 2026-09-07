@@ -78,3 +78,20 @@ def ensure_memory_scope_columns(engine: Engine) -> None:
             "(SELECT 1 FROM agent_runs WHERE agent_memories.memory_key = "
             "'agent-run:' || agent_runs.id || ':outcome')"
         )
+
+
+def ensure_memory_candidate_columns(engine: Engine) -> None:
+    """Upgrade SQLite candidate journals created before semantic evaluation."""
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("memory_candidates")
+    }
+    if "evaluator_output" in columns:
+        return
+    if engine.dialect.name != "sqlite":
+        raise RuntimeError(
+            "memory_candidates requires a database migration for evaluator_output"
+        )
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE memory_candidates ADD COLUMN evaluator_output JSON")
+        )

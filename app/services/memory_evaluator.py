@@ -11,8 +11,14 @@ from app.models import (
     AgentRun,
     AgentRunStep,
     AgentTask,
+    ExecutionTrace,
     MemoryCandidateRecord,
     ToolCallRecord,
+)
+from app.services.semantic_memory_evaluator import (
+    SemanticEvaluationResult,
+    SemanticMemoryEvaluator,
+    memory_context,
 )
 
 
@@ -51,6 +57,9 @@ class MemoryEvaluation:
     memory: AgentMemory | None = None
     candidate_record: MemoryCandidateRecord | None = None
     duplicate_memory_id: int | None = None
+    evaluator_version: str = EVALUATOR_VERSION
+    evaluator_usage: dict[str, int] | None = None
+    evaluator_output: dict | None = None
 
 
 def evaluate_and_store_run_outcome(
@@ -79,7 +88,11 @@ def evaluate_and_store_run_memories(
 
 
 def evaluate_and_store_candidate(
-    session: Session, task: AgentTask, candidate: MemoryCandidate
+    session: Session,
+    task: AgentTask,
+    candidate: MemoryCandidate,
+    *,
+    semantic_evaluator: SemanticMemoryEvaluator | None = None,
 ) -> MemoryEvaluation:
     existing = session.scalar(
         select(AgentMemory).where(
@@ -89,6 +102,14 @@ def evaluate_and_store_candidate(
         )
     )
     rule_evaluation = _evaluate_rules(session, task, candidate, check_duplicate=not existing)
+    if (
+        rule_evaluation.decision == "needs_review"
+        and rule_evaluation.reasons == ("semantic_evaluation_required",)
+        and semantic_evaluator is not None
+    ):
+        rule_evaluation = _evaluate_semantics(
+            session, task, rule_evaluation, semantic_evaluator
+        )
 
     if rule_evaluation.decision == "accept" and existing:
         if _normalized(existing.content) == _normalized(candidate.content):
@@ -313,7 +334,117 @@ def _validate_provenance(
             return "reject", ["tool_provenance_mismatch"]
         return "accept", ["provenance_verified"]
 
+    if candidate.source == "user_input":
+        required = ("execution_trace_id", "task_id", "evidence_text")
+        if any(provenance.get(field) is None for field in required):
+            return "reject", ["missing_user_input_provenance"]
+        trace = session.get(ExecutionTrace, provenance["execution_trace_id"])
+        evidence = _normalized(str(provenance["evidence_text"]))
+        if not trace:
+            return "reject", ["unknown_user_input_provenance"]
+        if (
+            trace.task_id != task.id
+            or provenance["task_id"] != task.id
+            or trace.event_type != "user_input"
+            or not evidence
+            or evidence not in _normalized(trace.input_summary)
+        ):
+            return "reject", ["user_input_provenance_mismatch"]
+        return "needs_review", ["semantic_evaluation_required"]
+
     return "needs_review", ["untrusted_provenance_source"]
+
+
+def _evaluate_semantics(
+    session: Session,
+    task: AgentTask,
+    rule_evaluation: MemoryEvaluation,
+    evaluator: SemanticMemoryEvaluator,
+) -> MemoryEvaluation:
+    candidate = rule_evaluation.candidate
+    memories = list(
+        session.scalars(
+            select(AgentMemory).where(
+                AgentMemory.goal_contract_id == task.goal_contract_id,
+                AgentMemory.status == "active",
+            )
+        )
+    )
+    try:
+        result = evaluator.evaluate(
+            candidate={
+                "memory_type": candidate.memory_type,
+                "scope_type": candidate.scope_type,
+                "content": candidate.content,
+                "source": candidate.source,
+                "importance": candidate.importance,
+            },
+            existing_memories=[memory_context(memory) for memory in memories],
+        )
+    except Exception:
+        return replace(
+            rule_evaluation,
+            reasons=("semantic_evaluator_failed",),
+            evaluator_version=f"{evaluator.evaluator_version}:failed",
+            evaluator_usage={
+                "model_calls": 1,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            },
+            evaluator_output={"status": "failed"},
+        )
+    return _apply_semantic_result(rule_evaluation, result, memories)
+
+
+def _apply_semantic_result(
+    rule_evaluation: MemoryEvaluation,
+    result: SemanticEvaluationResult,
+    memories: list[AgentMemory],
+) -> MemoryEvaluation:
+    candidate = rule_evaluation.candidate
+    judgment = result.judgment
+    known_ids = {memory.id for memory in memories}
+    referenced_ids = set(judgment.conflict_memory_ids)
+    if judgment.semantic_duplicate_memory_id:
+        referenced_ids.add(judgment.semantic_duplicate_memory_id)
+    common = {
+        "evaluator_version": result.evaluator_version,
+        "evaluator_usage": result.usage,
+        "evaluator_output": judgment.model_dump(),
+    }
+    if not referenced_ids.issubset(known_ids):
+        return replace(
+            rule_evaluation,
+            reasons=("invalid_model_memory_reference",),
+            **common,
+        )
+    if judgment.memory_type != candidate.memory_type:
+        return replace(rule_evaluation, reasons=("model_memory_type_mismatch",), **common)
+    if judgment.conflict_memory_ids:
+        return replace(rule_evaluation, reasons=("semantic_conflict",), **common)
+    if judgment.semantic_duplicate_memory_id:
+        return replace(
+            rule_evaluation,
+            decision="reject",
+            reasons=("semantic_duplicate",),
+            duplicate_memory_id=judgment.semantic_duplicate_memory_id,
+            **common,
+        )
+    if judgment.long_term_value == "low" or judgment.decision == "reject":
+        return replace(
+            rule_evaluation,
+            decision="reject",
+            reasons=("low_long_term_value",),
+            **common,
+        )
+    if judgment.decision == "accept":
+        return replace(
+            rule_evaluation,
+            decision="accept",
+            reasons=("semantic_value_verified", "provenance_verified"),
+            **common,
+        )
+    return replace(rule_evaluation, reasons=("model_requested_review",), **common)
 
 
 def _record_evaluation(
@@ -327,7 +458,7 @@ def _record_evaluation(
             MemoryCandidateRecord.goal_contract_id == task.goal_contract_id,
             MemoryCandidateRecord.memory_type == candidate.memory_type,
             MemoryCandidateRecord.memory_key == candidate.memory_key,
-            MemoryCandidateRecord.evaluator_version == EVALUATOR_VERSION,
+            MemoryCandidateRecord.evaluator_version == evaluation.evaluator_version,
         )
     )
     values = {
@@ -343,7 +474,9 @@ def _record_evaluation(
         "decision": evaluation.decision,
         "storage_action": evaluation.storage_action,
         "reasons": list(evaluation.reasons),
-        "evaluator_usage": {"model_calls": 0, "prompt_tokens": 0, "completion_tokens": 0},
+        "evaluator_usage": evaluation.evaluator_usage
+        or {"model_calls": 0, "prompt_tokens": 0, "completion_tokens": 0},
+        "evaluator_output": evaluation.evaluator_output,
     }
     if record:
         for field, value in values.items():
@@ -353,7 +486,7 @@ def _record_evaluation(
             goal_contract_id=task.goal_contract_id,
             memory_type=candidate.memory_type,
             memory_key=candidate.memory_key,
-            evaluator_version=EVALUATOR_VERSION,
+            evaluator_version=evaluation.evaluator_version,
             **values,
         )
         session.add(record)

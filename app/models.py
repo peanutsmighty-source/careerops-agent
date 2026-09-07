@@ -342,6 +342,7 @@ class MemoryCandidateRecord(Base):
     reasons: Mapped[list[str]] = mapped_column(JSON)
     evaluator_version: Mapped[str] = mapped_column(String(60))
     evaluator_usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    evaluator_output: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow

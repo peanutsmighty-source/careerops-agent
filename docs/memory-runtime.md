@@ -85,7 +85,11 @@ AgentRun final answer
 
 Candidate Journal 把“是否值得记住”和“本次是否执行写入”分开。例如恢复同一个 Run 时，判断仍是 `accept`，但写入动作是 `already_stored`。这样既不重复插入，也不会误称这条内容被拒绝。
 
-审核规则目前是确定性的，因此同一个候选会得到相同结论，测试时不依赖模型发挥。以后可以在 Candidate Builder 前接模型，让模型提出 fact、preference 或 episode 候选，但最终的敏感信息、重复和来源检查仍由确定性规则把关。
+审核先执行确定性规则，因此敏感信息、无效作用域、精确重复和伪造来源不会进入模型判断。对于来源已经由真实 `user_input` Trace 和原文证据验证、但长期价值仍不明确的 Candidate，可选 Semantic Evaluator 才会被调用。
+
+Semantic Evaluator 使用 Pydantic 结构化输出，同时给出类型、长期价值、语义重复 Memory ID、冲突 Memory ID 和结论。Runtime 会再次验证模型引用的 ID 是否确实来自本次提供的 Memory 列表；模型不能虚构 ID，也不能推翻确定性拒绝。模型超时或解析失败时采用 fail-closed：Candidate 保持 `needs_review`，不会写入 Memory。
+
+每次语义判断将 Evaluator 版本、模型调用次数、输入 token 和输出 token 写入 Candidate Journal。默认自动运行路径仍不调用语义模型；只有显式注入 Evaluator 且规则给出 `semantic_evaluation_required` 时才付出这部分 token 成本。
 
 Run 完成、审核结果、可选的 episodic memory 和 memory trace 在同一个数据库事务中提交。不会出现 Run 已标记完成，但审核记录丢失的半完成状态。
 
@@ -133,6 +137,6 @@ Runtime Console 的 `MEMORY RUNTIME` 区域显示同一结果。它是预览，�
 - 字符预算只是 token 预算的确定性近似。
 - working memory 已有 task/run 作用域，并会在对应 Run/Task 终止时软退休；尚未实现自动总结和晋升。
 - Candidate Builder 目前支持 Run outcome 的 episodic 候选和结构化技能需求的 fact 候选；还没有模型驱动的自由文本 fact/preference 提取。
-- 当前审核已检查来源/作用域完整性、最小信息量、敏感值和精确重复；尚未实现语义重复、事实冲突以及 `needs_review` 的人工处理动作。
+- 当前审核已检查来源/作用域完整性、最小信息量、敏感值和精确重复，并提供可选语义重复、长期价值和冲突判断；尚未实现 `needs_review` 的人工处理动作和事实 supersede 链。
 - Context Compaction 尚未实现；实现后 Runtime Console 必须同时展示压缩前输入、压缩后 Context、保留项和丢弃/摘要原因。
 - 尚未实现合并、冲突检测、遗忘和 context compaction。

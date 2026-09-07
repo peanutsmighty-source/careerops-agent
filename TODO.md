@@ -26,7 +26,7 @@ Tracked count: **18 capabilities**: 3 complete and 15 open. Sources: 8 `user-dir
   - Show newly created and rejected candidates in Runtime Console.
   - Acceptance: a user can explain why a Candidate did or did not become Memory.
 
-- [ ] **T04 Add an optional semantic/model Evaluator** (`user-derived`)
+- [x] **T04 Add an optional semantic/model Evaluator** (`user-derived`)
   - Use structured output to classify type, long-term value, semantic duplication, and possible conflicts.
   - Only call it after deterministic rules leave an ambiguous decision.
   - Acceptance: deterministic rules remain authoritative and model calls are metered.
