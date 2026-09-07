@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.env
+careerops.db
+careerops_checkpoints.db
+test_careerops.db
+test_careerops_checkpoints.db
+*.db-wal
+*.db-shm
+*.egg-info/
+.coverage
+htmlcov/
+.debug/
+hw_decoded_defanged.txt

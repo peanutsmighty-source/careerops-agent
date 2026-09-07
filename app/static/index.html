@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CareerOps Agent Runtime</title>
+  <link rel="stylesheet" href="/static/runtime.css?v=9">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>CareerOps Agent</h1>
+      <p>Runtime Console</p>
+    </div>
+    <div class="server-status" id="server-status" aria-live="polite">
+      <span class="status-dot"></span>
+      <span>正在连接</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="task-sidebar" aria-label="Agent 任务">
+      <div class="section-header">
+        <div>
+          <span class="eyebrow">TASKS</span>
+          <h2>Agent 任务</h2>
+        </div>
+        <button class="button button-primary" id="new-task-button" type="button">新建</button>
+      </div>
+      <div id="task-list" class="task-list" aria-live="polite"></div>
+    </aside>
+
+    <section class="runtime-main" aria-label="Runtime 状态">
+      <div id="empty-state" class="empty-state">
+        <h2>创建第一个可恢复任务</h2>
+        <p>任务运行后，这里会显示 Node、State、checkpoint 和人工审批状态。</p>
+        <button class="button button-primary" id="empty-create-button" type="button">创建任务</button>
+      </div>
+
+      <div id="task-view" hidden>
+        <div class="task-heading">
+          <div>
+            <span class="eyebrow">ACTIVE TASK</span>
+            <h2 id="task-title"></h2>
+            <p id="task-goal"></p>
+          </div>
+          <span class="status-label" id="task-status"></span>
+        </div>
+
+        <section class="graph-section" aria-labelledby="graph-title">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">LANGGRAPH</span>
+              <h3 id="graph-title">执行路径</h3>
+            </div>
+            <button class="button button-primary" id="run-button" type="button">运行 Graph</button>
+          </div>
+          <div class="graph-flow" id="graph-flow" aria-label="LangGraph 节点执行状态"></div>
+          <div class="approval-bar" id="approval-bar" hidden>
+            <div>
+              <strong>计划等待你的决定</strong>
+              <p id="approval-question"></p>
+            </div>
+            <div class="approval-actions">
+              <button class="button button-danger" id="reject-button" type="button">拒绝</button>
+              <button class="button button-primary" id="approve-button" type="button">批准并继续</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="result-section" aria-labelledby="result-title">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">OUTPUT</span>
+              <h3 id="result-title">JD 驱动学习计划</h3>
+            </div>
+          </div>
+          <div id="skill-strip" class="skill-strip"></div>
+          <div id="learning-plan" class="learning-plan"></div>
+        </section>
+
+        <section class="agent-loop-section" aria-labelledby="agent-loop-title">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">AGENT LOOP</span>
+              <h3 id="agent-loop-title">单 Agent 执行循环</h3>
+            </div>
+            <div class="agent-loop-controls">
+              <label>
+                <span>Provider</span>
+                <select id="agent-provider">
+                  <option value="demo">Demo</option>
+                  <option value="openai">OpenAI</option>
+                </select>
+              </label>
+              <label id="agent-model-row" hidden>
+                <span>Model</span>
+                <input id="agent-model" value="gpt-5-mini" maxlength="120">
+              </label>
+              <label>
+                <span>Max steps</span>
+                <input id="agent-max-steps" type="number" min="1" max="8" value="4">
+              </label>
+              <button class="button button-primary" id="run-agent-button" type="button">运行 Agent</button>
+              <button class="button" id="recover-agent-runs-button" type="button">恢复中断 Run</button>
+            </div>
+          </div>
+          <div class="agent-run-workspace">
+            <div>
+              <div class="state-heading">
+                <h3>Runs</h3>
+                <span id="agent-run-count">0 records</span>
+              </div>
+              <div id="agent-run-list" class="agent-run-list"></div>
+            </div>
+            <pre id="agent-run-result">运行后查看模型动作、observation 和停止原因</pre>
+          </div>
+          <div class="memory-context-section">
+            <div class="state-heading">
+              <div>
+                <span class="eyebrow">MEMORY RUNTIME</span>
+                <h3>下一次模型调用的 Memory Context</h3>
+              </div>
+              <button class="button" id="refresh-memory-context-button" type="button">刷新 Context</button>
+            </div>
+            <pre id="memory-context-result">选择任务后查看 GoalContract、选中记忆和上下文预算</pre>
+            <div class="memory-store-heading">
+              <div>
+                <span class="eyebrow">MEMORY STORE</span>
+                <h3>创建并检查持久化 Memory</h3>
+              </div>
+              <span id="memory-count">0 records</span>
+            </div>
+            <div class="memory-store-workspace">
+              <form id="memory-form" class="memory-form">
+                <div class="memory-form-row">
+                  <label>
+                    <span>类型</span>
+                    <select id="memory-type">
+                      <option value="fact">Fact</option>
+                      <option value="episodic">Episodic</option>
+                      <option value="working">Working</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>作用域</span>
+                    <select id="memory-scope">
+                      <option value="contract">Contract</option>
+                      <option value="task">Task</option>
+                      <option value="run">Run</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>重要性</span>
+                    <input id="memory-importance" type="number" min="1" max="5" value="3">
+                  </label>
+                </div>
+                <label>
+                  <span>Memory key</span>
+                  <input id="memory-key" maxlength="160" required placeholder="target-role">
+                </label>
+                <label>
+                  <span>内容</span>
+                  <textarea id="memory-content" rows="4" required placeholder="目标岗位是 AI Agent Engineer。"></textarea>
+                </label>
+                <label>
+                  <span>可选失效时间</span>
+                  <input id="memory-expires-at" type="datetime-local">
+                </label>
+                <div class="tool-actions">
+                  <span class="form-error" id="memory-error" role="alert"></span>
+                  <button class="button button-primary" id="create-memory-button" type="submit">创建 Memory</button>
+                </div>
+              </form>
+              <div class="memory-history">
+                <div id="memory-list" class="memory-list"></div>
+                <div id="memory-created-notice" class="memory-created-notice" role="status" aria-live="polite" hidden>
+                  <strong>新 Memory 已创建</strong>
+                  <span id="memory-created-summary"></span>
+                </div>
+                <pre id="memory-detail">创建或选择 Memory 后查看完整内容</pre>
+                <button class="button button-danger" id="retire-memory-button" type="button" hidden>退休当前 Memory</button>
+              </div>
+            </div>
+            <div class="memory-store-heading">
+              <div>
+                <span class="eyebrow">CANDIDATE JOURNAL</span>
+                <h3>为什么一条 Candidate 成为或没有成为 Memory</h3>
+              </div>
+              <span id="memory-candidate-count">0 records</span>
+            </div>
+            <div class="candidate-journal-workspace">
+              <div id="memory-candidate-list" class="memory-list"></div>
+              <pre id="memory-candidate-detail">运行 Agent 后查看 Candidate、来源证据和 Evaluator 判断</pre>
+            </div>
+          </div>
+        </section>
+
+        <section class="tool-section" aria-labelledby="tool-title">
+          <div class="section-header">
+            <div>
+              <span class="eyebrow">TOOL REGISTRY</span>
+              <h3 id="tool-title">工具执行台</h3>
+            </div>
+            <div class="tool-header-actions">
+              <span class="tool-permission" id="tool-permission"></span>
+              <button class="button" id="recover-tools-button" type="button">检查中断调用</button>
+            </div>
+          </div>
+          <div class="tool-workspace">
+            <form id="tool-form" class="tool-form">
+              <label>
+                <span>工具</span>
+                <select id="tool-select" name="tool_name"></select>
+              </label>
+              <p id="tool-description" class="tool-description"></p>
+              <p id="tool-policy" class="tool-policy"></p>
+              <label>
+                <span>Arguments JSON</span>
+                <textarea id="tool-arguments" name="arguments" rows="7" spellcheck="false"></textarea>
+              </label>
+              <label id="idempotency-row">
+                <span>Operation key</span>
+                <span class="input-action">
+                  <input id="idempotency-key" name="idempotency_key" maxlength="240">
+                  <button class="button" id="new-operation-key" type="button">新 Key</button>
+                </span>
+              </label>
+              <label class="permission-toggle" id="write-permission-row">
+                <input id="grant-write" type="checkbox">
+                <span>TaskPolicy 允许此写工具</span>
+              </label>
+              <div class="tool-actions">
+                <span class="form-error" id="tool-error" role="alert"></span>
+                <button class="button button-primary" id="call-tool-button" type="submit">调用工具</button>
+              </div>
+            </form>
+            <div class="tool-history">
+              <div class="state-heading">
+                <h3>最近调用</h3>
+                <span id="tool-call-count">0 records</span>
+              </div>
+              <div id="tool-call-list" class="tool-call-list"></div>
+              <pre id="tool-result">调用工具后查看 observation</pre>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <aside class="inspection-panel" aria-label="Checkpoint 检查器">
+      <div class="section-header">
+        <div>
+          <span class="eyebrow">CHECKPOINTS</span>
+          <h2>状态历史</h2>
+        </div>
+        <span class="checkpoint-count" id="checkpoint-count">0</span>
+      </div>
+      <div id="checkpoint-list" class="checkpoint-list"></div>
+      <div class="state-inspector">
+        <div class="state-heading">
+          <h3>State</h3>
+          <span id="selected-step"></span>
+        </div>
+        <pre id="state-json">选择任务后查看 State</pre>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="task-dialog">
+    <form id="task-form" method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <span class="eyebrow">NEW TASK</span>
+          <h2>创建 AgentTask</h2>
+        </div>
+        <button class="icon-button" id="close-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+      <label>
+        <span>任务名称</span>
+        <input name="title" required value="生成 JD 驱动学习路线">
+      </label>
+      <label>
+        <span>用户目标</span>
+        <textarea name="user_goal" required rows="3">根据真实 JD 选择接下来学习的三个 Agent 技能</textarea>
+      </label>
+      <label>
+        <span>约束</span>
+        <input name="constraint" value="每周学习 8 小时">
+      </label>
+      <label>
+        <span>成功标准</span>
+        <textarea name="success_criterion" required rows="2">生成一份经过我确认的 JD 驱动学习路线</textarea>
+      </label>
+      <div id="form-error" class="form-error" role="alert"></div>
+      <div class="dialog-actions">
+        <button class="button" id="cancel-dialog" type="button">取消</button>
+        <button class="button button-primary" type="submit">创建任务</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/runtime.js?v=9"></script>
+</body>
+</html>
