@@ -71,6 +71,7 @@ Tracked count: **18 capabilities**: 6 complete and 12 open. Sources: 8 `user-dir
 - [ ] **T18 Build Memory precision/recall benchmarks** (`user-derived`)
   - Label what should be stored, rejected, reviewed, retrieved, and preserved through compaction.
   - Acceptance: CI reports Candidate precision/recall and critical-constraint retention.
+  - Progress: deterministic Candidate and retrieval benchmarks now report the pre-compaction baseline; T10 must reuse the critical-constraint metric before this item is complete.
 
 ## P2 - Runtime Reliability
 

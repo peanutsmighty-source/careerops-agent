@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 careerops-debug = "app.debug_cli:main"
+careerops-memory-benchmark = "app.memory_benchmark:main"
 
 [project.optional-dependencies]
 dev = [

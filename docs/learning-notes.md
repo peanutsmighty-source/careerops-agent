@@ -200,3 +200,10 @@ Memory 是持久化候选信息，Context 是某次模型调用临时选择出�
 3. 如何处理两个 worker 并发 supersede 同一个 Memory 的版本竞争？
 4. 为什么工具事实可以自动更新，而用户偏好通常需要人工确认？
 5. 数据库事务能保证哪些一致性，又不能解决哪些外部系统问题？
+
+## 19. Memory Benchmark 最小基线
+
+- 例如“包含密钥的 Candidate 必须 reject”是一个带标签样本；benchmark 比较预期和真实 Evaluator 决策，而不是只检查代码是否执行。
+- precision 衡量被系统接受的 Candidate 有多少确实应该保存，recall 衡量应该保存的 Candidate 有多少没有漏掉；三分类准确率另外检查 `needs_review` 是否被误并入 accept/reject。
+- 当前还记录检索召回和压缩前关键约束保留率，为 T10 提供同一量尺；没有 compactor 时不能声称完成压缩后保留验证。
+- 小样本 1.0 是防回归基线，不是线上质量结论。后续应从真实错误中扩展标注集，防止 benchmark 只覆盖实现已经擅长的案例。
