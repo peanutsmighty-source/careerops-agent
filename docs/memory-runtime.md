@@ -46,7 +46,11 @@ Memory 有 `active` 和 `retired` 两个状态。Context 只召回 active Memory
 - 用户可以通过 `POST /agent/memories/{memory_id}/retire` 明确撤回一条 Memory。
 - `expires_at` 只是适合时间敏感信息的辅助边界。到期记录不会进入 Context，但事实是否仍成立不能只靠时间判断。
 
-退休采用软删除：内容、来源、退休时间和原因继续保留，便于审计，不再影响模型。尚未实现 working memory 晋升、事实 supersede 链和后台物理清理。
+退休采用软删除：内容、来源、退休时间和原因继续保留，便于审计，不再影响模型。working memory 晋升和后台物理清理尚未实现。
+
+事实变化使用版本覆盖，而不是让同一稳定 key 的旧值与新值同时保持 active。例如 `task:12:skill-demand` 从“LangGraph 出现在 3 个 JD”变为“出现在 5 个 JD”时，`AgentMemory` 原地更新为 version 2，version 1 和 version 2 都写入 `AgentMemoryRevision`。旧 revision 的 `valid_to` 被关闭，只有 `AgentMemory` 的当前内容进入 Context。
+
+自动 supersede 被刻意限制为 provenance 已验证的 `tool:*` fact，并且新旧记录必须属于同一 scope、task 和 run。用户事实、模型推断和模糊冲突仍然拒绝覆盖或进入 `needs_review`，不能因为模型声称“这是更新值”就退休旧事实。
 
 ## 读取流程
 
@@ -75,7 +79,7 @@ AgentRun final answer
   -> accept：允许成为 Memory
      reject：确定不应保存
      needs_review：证据不足，等待人或后续模型复核
-  -> storage_action：stored / already_stored / not_stored
+  -> storage_action：stored / superseded / already_stored / not_stored
   -> 每种结果都写入 MemoryCandidateRecord 和 ExecutionTrace
 ```
 
@@ -83,7 +87,9 @@ AgentRun final answer
 
 `provenance` 不是 Candidate 自己声称“我有来源”就算有效。`agent_runtime` 来源会查询真实 AgentRun 并核对 task、provider 和 model；`tool:*` 来源会继续核对 AgentRunStep 和 ToolCall 是否存在、是否属于同一个 task、工具名是否一致。模型给出的未知 ID 会被拒绝，原始声明仍留在 provenance 供审计，但不会写进可信外键列。来源类型暂时无法验证时，Candidate 进入 `needs_review`。
 
-Candidate Journal 把“是否值得记住”和“本次是否执行写入”分开。例如恢复同一个 Run 时，判断仍是 `accept`，但写入动作是 `already_stored`。这样既不重复插入，也不会误称这条内容被拒绝。
+Candidate Journal 把“是否值得记住”和“本次是否执行写入”分开。例如恢复同一个 Run 时，判断仍是 `accept`，但写入动作是 `already_stored`；可信工具事实变化时则是 `accept + superseded`。这样既不重复插入，也不会误称这条内容被拒绝。
+
+Journal 自身是 append-only 审计记录。同一稳定 key 和同一 Evaluator 版本的后续评估会新增行，而不是更新旧行。因此“3 个 JD”的首次 `stored` 决策和“5 个 JD”的后续 `superseded` 决策可以同时解释。旧 SQLite 开发库启动时会移除历史 upsert 唯一约束并保留已有行。
 
 审核先执行确定性规则，因此敏感信息、无效作用域、精确重复和伪造来源不会进入模型判断。对于来源已经由真实 `user_input` Trace 和原文证据验证、但长期价值仍不明确的 Candidate，可选 Semantic Evaluator 才会被调用。
 
@@ -152,6 +158,6 @@ Runtime Console 的 `MEMORY RUNTIME` 区域显示同一结果。它是预览，�
 - 字符预算只是 token 预算的确定性近似。
 - working memory 已有 task/run 作用域，并会在对应 Run/Task 终止时软退休；尚未实现自动总结和晋升。
 - Candidate Builder 目前支持 Run outcome 的 episodic 候选和结构化技能需求的 fact 候选；还没有模型驱动的自由文本 fact/preference 提取。
-- 当前审核已检查来源/作用域完整性、最小信息量、敏感值、规范化重复和可选 Embedding/模型语义重复；冲突目前进入 `needs_review`，尚未实现人工处理动作和事实 supersede 链。
+- 当前审核已检查来源/作用域完整性、最小信息量、敏感值、规范化重复和可选 Embedding/模型语义重复；provenance 已验证的同 scope 工具事实支持自动 supersede，用户事实和模型提出的模糊冲突仍进入拒绝或人工复核，尚未实现人工冲突处理动作。
 - Context Compaction 尚未实现；实现后 Runtime Console 必须同时展示压缩前输入、压缩后 Context、保留项和丢弃/摘要原因。
-- 尚未实现合并、冲突检测、遗忘和 context compaction。
+- 尚未实现后台 consolidation、遗忘和 context compaction。

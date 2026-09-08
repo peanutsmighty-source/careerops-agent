@@ -24,6 +24,7 @@ from app.services.memory_similarity import (
     SimilaritySearchResult,
     rank_similar_memories,
 )
+from app.services.memory_versioning import record_initial_memory_version, supersede_memory
 
 
 MIN_OUTCOME_LENGTH = 24
@@ -129,11 +130,26 @@ def evaluate_and_store_candidate(
                 memory=existing,
             )
         else:
-            evaluation = replace(
-                rule_evaluation,
-                decision="reject",
-                reasons=("memory_key_conflict",),
-            )
+            if _can_auto_supersede(existing, candidate):
+                memory = supersede_memory(
+                    session,
+                    existing,
+                    content=candidate.content,
+                    source=candidate.source,
+                    importance=candidate.importance,
+                    provenance=candidate.provenance,
+                    reason="trusted_fact_changed",
+                )
+                evaluation = replace(
+                    rule_evaluation,
+                    reasons=("trusted_fact_superseded", "provenance_verified"),
+                    storage_action="superseded",
+                    memory=memory,
+                )
+            else:
+                evaluation = replace(
+                    rule_evaluation, decision="reject", reasons=("memory_key_conflict",)
+                )
     elif rule_evaluation.decision == "accept":
         memory = AgentMemory(
             goal_contract_id=task.goal_contract_id,
@@ -148,6 +164,7 @@ def evaluate_and_store_candidate(
         )
         session.add(memory)
         session.flush()
+        record_initial_memory_version(session, memory, provenance=candidate.provenance)
         evaluation = replace(rule_evaluation, storage_action="stored", memory=memory)
     else:
         evaluation = rule_evaluation
@@ -218,7 +235,7 @@ def build_skill_demand_candidate(
             scope_type="task",
             task_id=task.id,
             run_id=None,
-            memory_key=f"agent-run:{run.id}:skill-demand",
+            memory_key=f"task:{task.id}:skill-demand",
             content=f"Observed JD skill demand: {evidence}.",
             source="tool:get_skill_demand",
             importance=4,
@@ -499,49 +516,47 @@ def _apply_semantic_result(
     return replace(rule_evaluation, reasons=("model_requested_review",), **common)
 
 
+def _can_auto_supersede(existing: AgentMemory, candidate: MemoryCandidate) -> bool:
+    return (
+        existing.status == "active"
+        and candidate.memory_type == "fact"
+        and candidate.source.startswith("tool:")
+        and existing.scope_type == candidate.scope_type
+        and existing.task_id == candidate.task_id
+        and existing.run_id == candidate.run_id
+    )
+
+
 def _record_evaluation(
     session: Session, task: AgentTask, evaluation: MemoryEvaluation
 ) -> MemoryCandidateRecord:
     candidate = evaluation.candidate
     claimed_run_id = candidate.provenance.get("agent_run_id")
     source_run = session.get(AgentRun, claimed_run_id) if claimed_run_id else None
-    record = session.scalar(
-        select(MemoryCandidateRecord).where(
-            MemoryCandidateRecord.goal_contract_id == task.goal_contract_id,
-            MemoryCandidateRecord.memory_type == candidate.memory_type,
-            MemoryCandidateRecord.memory_key == candidate.memory_key,
-            MemoryCandidateRecord.evaluator_version == evaluation.evaluator_version,
-        )
-    )
-    values = {
-        "task_id": task.id,
-        "source_run_id": source_run.id if source_run and source_run.task_id == task.id else None,
-        "scope_run_id": candidate.run_id,
-        "memory_id": evaluation.memory.id if evaluation.memory else None,
-        "scope_type": candidate.scope_type,
-        "content": candidate.content,
-        "source": candidate.source,
-        "importance": candidate.importance,
-        "provenance": candidate.provenance,
-        "decision": evaluation.decision,
-        "storage_action": evaluation.storage_action,
-        "reasons": list(evaluation.reasons),
-        "evaluator_usage": evaluation.evaluator_usage
+    record = MemoryCandidateRecord(
+        goal_contract_id=task.goal_contract_id,
+        task_id=task.id,
+        source_run_id=(
+            source_run.id if source_run and source_run.task_id == task.id else None
+        ),
+        scope_run_id=candidate.run_id,
+        memory_id=evaluation.memory.id if evaluation.memory else None,
+        memory_type=candidate.memory_type,
+        scope_type=candidate.scope_type,
+        memory_key=candidate.memory_key,
+        content=candidate.content,
+        source=candidate.source,
+        importance=candidate.importance,
+        provenance=candidate.provenance,
+        decision=evaluation.decision,
+        storage_action=evaluation.storage_action,
+        reasons=list(evaluation.reasons),
+        evaluator_version=evaluation.evaluator_version,
+        evaluator_usage=evaluation.evaluator_usage
         or {"model_calls": 0, "prompt_tokens": 0, "completion_tokens": 0},
-        "evaluator_output": evaluation.evaluator_output,
-    }
-    if record:
-        for field, value in values.items():
-            setattr(record, field, value)
-    else:
-        record = MemoryCandidateRecord(
-            goal_contract_id=task.goal_contract_id,
-            memory_type=candidate.memory_type,
-            memory_key=candidate.memory_key,
-            evaluator_version=evaluation.evaluator_version,
-            **values,
-        )
-        session.add(record)
+        evaluator_output=evaluation.evaluator_output,
+    )
+    session.add(record)
     session.flush()
     return record
 

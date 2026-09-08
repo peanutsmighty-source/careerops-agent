@@ -95,7 +95,8 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `ProfileEvidence`: a concrete project, code, demo, or document that supports a skill.
 - `GapTask`: a manually reviewed action that improves a skill or its evidence.
 - `GoalContract`: versioned north-star goal, scope guardrails, and success criteria that compaction must preserve.
-- `AgentMemory`: typed working, episodic, or fact memory with contract/task/run visibility scope.
+- `AgentMemory`: typed working, episodic, or fact memory with contract/task/run visibility scope and versioned fact history.
+- `AgentMemoryRevision`: an immutable-style snapshot of one Memory version, including provenance and validity interval.
 - `AgentAlignment`: an auditable decision that connects proposed work to an Agent capability, success criterion, and learning outcome.
 - `AgentTask`: a user-level goal contract with constraints, success criteria, and runtime status.
 - `PlanStep`: ordered work that must map to an `AgentTask` success criterion.
@@ -120,6 +121,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `GET /agent/goal-contract`: retrieve the active Agent goal contract.
 - `POST /agent/goal-contracts`: create a new active goal contract version.
 - `POST /agent/memories` and `GET /agent/memories`: store and retrieve typed Agent memory.
+- `GET /agent/memories/{memory_id}/revisions`: inspect the complete version history of one Memory.
 - `POST /agent/alignments`: record a goal-alignment decision before a development action.
 - `POST /agent/tasks`, `GET /agent/tasks`, and `GET /agent/tasks/{task_id}`: create and retrieve user task contracts.
 - `POST /agent/tasks/{task_id}/plan`: validate and persist ordered plan steps against the user task contract.

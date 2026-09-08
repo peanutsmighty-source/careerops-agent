@@ -334,7 +334,13 @@ def test_agent_memory_is_typed_and_scoped_to_active_goal_contract(client):
     )
 
     assert created.status_code == 201
-    assert created.json()["goal_contract_id"] == contract["id"]
+    memory = created.json()
+    assert memory["goal_contract_id"] == contract["id"]
+    assert memory["version"] == 1
+    revisions = client.get(f"/agent/memories/{memory['id']}/revisions").json()
+    assert [(revision["version"], revision["change_reason"]) for revision in revisions] == [
+        (1, "created")
+    ]
 
     listed = client.get("/agent/memories?memory_type=episodic")
     assert listed.status_code == 200
@@ -541,7 +547,7 @@ def test_agent_loop_reads_memory_and_writes_one_idempotent_episode(client):
         "novel",
         "provenance_verified",
     ]
-    fact_key = f"agent-run:{run['id']}:skill-demand"
+    fact_key = f"task:{task['id']}:skill-demand"
     fact = next(
         memory
         for memory in client.get("/agent/memories?memory_type=fact").json()
@@ -1038,6 +1044,112 @@ def test_embedding_shortlist_and_model_block_a_paraphrased_duplicate(client):
         "learning-style-original",
         "target-role",
     }
+
+
+def test_trusted_tool_fact_supersedes_old_version_and_preserves_history(client):
+    task_payload = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Track current JD demand",
+            "user_goal": "Keep the latest structured skill demand available.",
+            "success_criteria": ["Old facts remain auditable but leave active context."],
+        },
+    ).json()
+
+    with Session(engine) as session:
+        task = session.get(AgentTask, task_payload["id"])
+        run = AgentRun(
+            task_id=task.id,
+            provider="demo",
+            model="memory-version-test",
+            status="completed",
+            max_steps=1,
+            step_count=1,
+        )
+        session.add(run)
+        session.flush()
+        tool_call = ToolCallRecord(
+            task_id=task.id,
+            tool_name="get_skill_demand",
+            permission="read",
+            effect="read",
+            idempotency_mode="none",
+            repeat_policy="always_allow",
+            idempotency_key="memory-version-skill-demand",
+            request_fingerprint=request_fingerprint("get_skill_demand", {}),
+            arguments_json={},
+            status="succeeded",
+            attempt_count=1,
+            output_json={"skills": []},
+        )
+        session.add(tool_call)
+        session.flush()
+        step = AgentRunStep(
+            run_id=run.id,
+            task_id=task.id,
+            sequence=1,
+            action_type="tool_call",
+            model_request={},
+            model_response={"tool_name": "get_skill_demand"},
+            tool_call_id=tool_call.id,
+            observation={"status": "succeeded", "output": {"skills": []}},
+        )
+        session.add(step)
+        session.flush()
+        provenance = {
+            "agent_run_id": run.id,
+            "task_id": task.id,
+            "agent_run_step_id": step.id,
+            "tool_call_id": tool_call.id,
+            "tool_name": "get_skill_demand",
+        }
+
+        def candidate(content: str) -> MemoryCandidate:
+            return MemoryCandidate(
+                memory_type="fact",
+                scope_type="task",
+                task_id=task.id,
+                run_id=None,
+                memory_key=f"task:{task.id}:skill-demand",
+                content=content,
+                source="tool:get_skill_demand",
+                importance=4,
+                relevance_text=content,
+                provenance=provenance,
+            )
+
+        first = evaluate_and_store_candidate(
+            session, task, candidate("LangGraph demand appears in 3 archived job descriptions.")
+        )
+        second = evaluate_and_store_candidate(
+            session, task, candidate("LangGraph demand appears in 5 archived job descriptions.")
+        )
+        memory_id = second.memory.id
+        session.commit()
+
+    assert first.storage_action == "stored"
+    assert second.storage_action == "superseded"
+    assert second.reasons == ("trusted_fact_superseded", "provenance_verified")
+    current = client.get("/agent/memories?memory_type=fact").json()
+    assert len(current) == 1
+    assert current[0]["id"] == memory_id
+    assert current[0]["version"] == 2
+    assert "5 archived" in current[0]["content"]
+    revisions = client.get(f"/agent/memories/{memory_id}/revisions").json()
+    assert [revision["version"] for revision in revisions] == [1, 2]
+    assert revisions[0]["valid_to"] is not None
+    assert revisions[1]["valid_to"] is None
+    candidates = client.get(
+        f"/agent/memory-candidates?task_id={task_payload['id']}"
+    ).json()
+    assert [candidate["storage_action"] for candidate in candidates] == [
+        "superseded",
+        "stored",
+    ]
+    assert [candidate["content"] for candidate in candidates] == [
+        "LangGraph demand appears in 5 archived job descriptions.",
+        "LangGraph demand appears in 3 archived job descriptions.",
+    ]
 
 
 def test_normalized_duplicate_skips_embedding_and_model(client):

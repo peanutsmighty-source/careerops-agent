@@ -292,6 +292,7 @@ class AgentMemory(Base):
     content: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(80), default="user")
     importance: Mapped[int] = mapped_column(Integer, default=3)
+    version: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(20), default=MemoryStatus.ACTIVE, index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -302,19 +303,35 @@ class AgentMemory(Base):
     )
 
     goal_contract: Mapped[GoalContract] = relationship(back_populates="memories")
+    revisions: Mapped[list[AgentMemoryRevision]] = relationship(
+        back_populates="memory",
+        cascade="all, delete-orphan",
+        order_by="AgentMemoryRevision.version",
+    )
+
+
+class AgentMemoryRevision(Base):
+    __tablename__ = "agent_memory_revisions"
+    __table_args__ = (
+        UniqueConstraint("memory_id", "version", name="uq_agent_memory_revision_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    memory_id: Mapped[int] = mapped_column(ForeignKey("agent_memories.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(80))
+    importance: Mapped[int] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    change_reason: Mapped[str] = mapped_column(String(120))
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    memory: Mapped[AgentMemory] = relationship(back_populates="revisions")
 
 
 class MemoryCandidateRecord(Base):
     __tablename__ = "memory_candidates"
-    __table_args__ = (
-        UniqueConstraint(
-            "goal_contract_id",
-            "memory_type",
-            "memory_key",
-            "evaluator_version",
-            name="uq_memory_candidate_evaluation",
-        ),
-    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     goal_contract_id: Mapped[int] = mapped_column(ForeignKey("goal_contracts.id"), index=True)

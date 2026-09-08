@@ -14,11 +14,13 @@ from app.database import Base, engine, get_session
 from app.schema_compat import (
     ensure_agent_timing_columns,
     ensure_memory_candidate_columns,
+    ensure_memory_revision_history,
     ensure_memory_scope_columns,
 )
 from app.models import (
     AgentAlignment,
     AgentMemory,
+    AgentMemoryRevision,
     AgentRun,
     AgentTask,
     ArchiveStatus,
@@ -37,6 +39,7 @@ from app.schemas import (
     AgentAlignmentRead,
     AgentMemoryCreate,
     AgentMemoryRead,
+    AgentMemoryRevisionRead,
     AgentMemoryRetire,
     AgentTaskCreate,
     AgentTaskRead,
@@ -115,6 +118,7 @@ from app.services.agent_workflow import (
 from app.services.agent_run_recovery import recover_stale_agent_runs
 from app.services.memory_runtime import assemble_memory_context, resolve_memory_scope
 from app.services.memory_lifecycle import retire_memory, retire_task_working_memories
+from app.services.memory_versioning import record_initial_memory_version
 
 
 app = FastAPI(title="CareerOps Agent", version="0.1.0")
@@ -127,6 +131,7 @@ def create_tables() -> None:
     Base.metadata.create_all(bind=engine)
     ensure_memory_scope_columns(engine)
     ensure_memory_candidate_columns(engine)
+    ensure_memory_revision_history(engine)
     ensure_agent_timing_columns(engine)
     with Session(engine) as session:
         _get_or_create_active_goal_contract(session)
@@ -182,6 +187,8 @@ def create_agent_memory(
     memory = AgentMemory(goal_contract_id=contract.id, **values)
     session.add(memory)
     try:
+        session.flush()
+        record_initial_memory_version(session, memory)
         session.commit()
     except IntegrityError as exc:
         session.rollback()
@@ -203,6 +210,26 @@ def list_agent_memories(
     if not include_retired:
         statement = statement.where(AgentMemory.status == "active")
     return list(session.scalars(statement.order_by(AgentMemory.importance.desc(), AgentMemory.id)))
+
+
+@app.get(
+    "/agent/memories/{memory_id}/revisions",
+    response_model=list[AgentMemoryRevisionRead],
+)
+def list_agent_memory_revisions(
+    memory_id: int, session: Session = Depends(get_session)
+) -> list[AgentMemoryRevision]:
+    contract = _get_or_create_active_goal_contract(session)
+    memory = session.get(AgentMemory, memory_id)
+    if not memory or memory.goal_contract_id != contract.id:
+        raise HTTPException(status_code=404, detail="memory not found")
+    return list(
+        session.scalars(
+            select(AgentMemoryRevision)
+            .where(AgentMemoryRevision.memory_id == memory.id)
+            .order_by(AgentMemoryRevision.version)
+        )
+    )
 
 
 @app.get("/agent/memory-candidates", response_model=list[MemoryCandidateRead])

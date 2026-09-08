@@ -120,11 +120,27 @@ class AgentMemoryRead(AgentMemoryCreate):
 
     id: int
     goal_contract_id: int
+    version: int
     status: Literal["active", "retired"]
     retired_at: datetime | None
     retirement_reason: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class AgentMemoryRevisionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    memory_id: int
+    version: int
+    content: str
+    source: str
+    importance: int
+    provenance: dict | None
+    change_reason: str
+    valid_from: datetime
+    valid_to: datetime | None
 
 
 class AgentMemoryRetire(BaseModel):
@@ -148,7 +164,7 @@ class MemoryCandidateRead(BaseModel):
     importance: int
     provenance: dict
     decision: Literal["accept", "reject", "needs_review"]
-    storage_action: Literal["stored", "already_stored", "not_stored"]
+    storage_action: Literal["stored", "superseded", "already_stored", "not_stored"]
     reasons: list[str]
     evaluator_version: str
     evaluator_usage: dict | None

@@ -177,3 +177,26 @@ Memory 是持久化候选信息，Context 是某次模型调用临时选择出�
 - 每个 AgentRunStep 记录 Context 装配、请求构造、模型调用、工具调用和 Step 总耗时；AgentRun 汇总所有 Step，并额外记录 Memory 收尾和无法归因的 wall-clock 时间。
 - unattributed_ms 不是错误，它包含数据库提交、调度、恢复间隔以及尚未单独埋点的代码。该值异常大时，说明应该继续增加 span，而不是武断地归因给模型。
 - 失败 Run 记录 failed_phase。例如 model_call 表示异常发生在等待或解析模型响应期间，而不是工具 handler。
+
+## 18. 事实版本、Supersede 与 Candidate 审计
+
+以同一个学习任务的技能统计为例：第一次工具观察到“LangGraph 出现在 3 个 JD”，后来重新统计得到“出现在 5 个 JD”。这不是两条可以并列进入 Context 的事实，而是同一个稳定事实在不同时刻的两个版本。
+
+- `AgentMemory` 保存当前值和当前 `version`，供 Context 读取。
+- `AgentMemoryRevision` 保存每个版本的内容、来源、provenance、变更原因和有效时间区间，供审计。
+- supersede 在同一事务中关闭旧 revision、递增 Memory version、更新当前值并创建新 revision；缺少任一步都会产生“当前值”和历史不一致的半完成状态。
+- 旧 Memory 在启动迁移时立即补一条 `legacy_backfill` v1 revision。若等到第一次 supersede 才补，尚未发生变化的旧 Memory 会在 revision API 中没有历史，审计语义不完整。
+- 自动 supersede 只接受来源链已经由 Runtime 核验的工具事实。用户偏好和模型判断可能涉及语义误解或高风险覆盖，必须继续拒绝或进入 `needs_review`。
+- Candidate Journal 记录的是每一次判断事件，不能按稳定 key 做 upsert。“3 个 JD”的 `stored` 和“5 个 JD”的 `superseded` 都必须保留，否则事后只能看到结果，无法解释系统何时、为何改变事实。
+
+主流 Agent 系统通常也会把当前视图与历史事件分开：当前状态服务低成本读取，revision/event log 服务审计、回放和纠错；模型只提出候选，确定性 Runtime 控制版本号、作用域、来源校验和写入事务。
+
+本次实现的难点是兼容旧 SQLite：删除唯一约束不能用普通 `ALTER TABLE`，因此启动兼容逻辑需要在事务中创建 append-only 新表、复制旧 Journal、替换旧表并恢复索引。测试同时验证旧行保留、重复稳定键可以追加以及迁移可安全重复运行。
+
+面试时可以继续追问：
+
+1. 为什么不能让旧事实和新事实同时进入模型 Context？
+2. revision table、事件溯源和普通审计日志有什么区别？
+3. 如何处理两个 worker 并发 supersede 同一个 Memory 的版本竞争？
+4. 为什么工具事实可以自动更新，而用户偏好通常需要人工确认？
+5. 数据库事务能保证哪些一致性，又不能解决哪些外部系统问题？

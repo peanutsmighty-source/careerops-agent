@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 3 complete and 15 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **18 capabilities**: 6 complete and 12 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -35,7 +35,7 @@ Tracked count: **18 capabilities**: 3 complete and 15 open. Sources: 8 `user-dir
   - Combine normalized matching, embeddings, and model review for borderline cases.
   - Acceptance: paraphrases do not create redundant active Memory.
 
-- [ ] **T06 Add fact conflict, version, and supersede handling** (`user-derived`)
+- [x] **T06 Add fact conflict, version, and supersede handling** (`user-derived`)
   - Preserve history while ensuring only the current fact enters Context.
   - Acceptance: changed JD counts or user preferences retire/supersede older facts instead of silently coexisting.
 
