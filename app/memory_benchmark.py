@@ -12,6 +12,7 @@ from app.models import AgentMemory, AgentRun, AgentTask, ExecutionTrace, GoalCon
 from app.services.memory_evaluator import MemoryCandidate, evaluate_and_store_candidate
 from app.services.memory_runtime import assemble_memory_context
 from app.services.memory_versioning import record_initial_memory_version
+from app.services.context_compaction import compact_agent_context
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class MemoryBenchmarkReport:
     decision_accuracy: float
     retrieval_recall: float
     pre_compaction_critical_constraint_retention: float
+    post_compaction_critical_constraint_retention: float
     candidate_cases: tuple[CandidateCaseResult, ...]
 
     def as_dict(self) -> dict:
@@ -226,6 +228,32 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
             now=benchmark_now,
         )
         retrieved_keys = {memory["memory_key"] for memory in context.memories}
+        compacted = compact_agent_context(
+            task,
+            run_id=run.id,
+            step_number=2,
+            max_steps=run.max_steps,
+            memory_context=context.as_dict(),
+            observations=[
+                {
+                    "tool_call_id": 1,
+                    "trace_id": 1,
+                    "tool_name": "benchmark_tool",
+                    "status": "succeeded",
+                    "output": {"detail": "old observation " * 200},
+                }
+            ],
+            char_threshold=0,
+            recent_observation_tokens=1,
+        )
+        compacted_keys = {
+            memory["memory_key"]
+            for memory in compacted.compacted_context["memory_context"]["memories"]
+        }
+        protected_constraint_retained = (
+            critical_key in compacted_keys
+            and compacted.compacted_context["task"]["constraints"] == task.constraints
+        )
 
     expected_positive = [case.expected_decision == "accept" for case in results]
     actual_positive = [case.actual_decision == "accept" for case in results]
@@ -248,6 +276,9 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
         ),
         retrieval_recall=_ratio(len(relevant_keys & retrieved_keys), len(relevant_keys)),
         pre_compaction_critical_constraint_retention=float(critical_key in retrieved_keys),
+        post_compaction_critical_constraint_retention=float(
+            protected_constraint_retained
+        ),
         candidate_cases=results,
     )
 

@@ -205,5 +205,14 @@ Memory 是持久化候选信息，Context 是某次模型调用临时选择出�
 
 - 例如“包含密钥的 Candidate 必须 reject”是一个带标签样本；benchmark 比较预期和真实 Evaluator 决策，而不是只检查代码是否执行。
 - precision 衡量被系统接受的 Candidate 有多少确实应该保存，recall 衡量应该保存的 Candidate 有多少没有漏掉；三分类准确率另外检查 `needs_review` 是否被误并入 accept/reject。
-- 当前还记录检索召回和压缩前关键约束保留率，为 T10 提供同一量尺；没有 compactor 时不能声称完成压缩后保留验证。
+- 当前同时记录检索召回以及压缩前后关键约束保留率，用同一标签检查 compactor 是否破坏安全边界。
 - 小样本 1.0 是防回归基线，不是线上质量结论。后续应从真实错误中扩展标注集，防止 benchmark 只覆盖实现已经擅长的案例。
+
+## 20. 可观察 Context Compaction
+
+例如四次工具调用带来很长的 observation 历史时，系统可摘要旧 observation，但“仍需用户授权”这个 blocker 和下一步计划不能一起被裁掉。
+
+- 压缩的目标是减少一次模型调用的临时输入；原始输入仍进入持久化审计，不能把 compaction 当成删除历史。
+- CareerOps 用 LangChain `trim_messages` 选择近期 observation，自身负责触发阈值、受保护字段、确定性摘要、持久化和 UI；因此不需要把项目上下文交给外部总结模型。
+- 摘要保留 tool call、trace、plan step 等 ID 和结果预览，使模型仍能连接因果链；详细旧内容只留在 `removed_items` 审计中。
+- 主要陷阱是把字符触发阈值误称为完整 token 预算。工具 schema、系统指令等尚未计入，本阶段只完成 T10，模型级预算留给 T11。

@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 6 complete and 12 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **18 capabilities**: 8 complete and 10 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -41,7 +41,7 @@ Tracked count: **18 capabilities**: 6 complete and 12 open. Sources: 8 `user-dir
 
 ## P1 - Context and Retrieval
 
-- [ ] **T10 Implement observable Context Compaction** (`user-direct`)
+- [x] **T10 Implement observable Context Compaction** (`user-direct`)
   - Reuse LangGraph/LangChain message trimming and summarization primitives.
   - CareerOps owns protected fields, trigger policy, persistence, and audit UI.
   - Show raw input, compacted Context, retained items, removed items, and reasons.
@@ -68,10 +68,9 @@ Tracked count: **18 capabilities**: 6 complete and 12 open. Sources: 8 `user-dir
   - Keep audit history while bounding active and retained storage.
   - Acceptance: repeated runs cannot grow active Context without limit.
 
-- [ ] **T18 Build Memory precision/recall benchmarks** (`user-derived`)
+- [x] **T18 Build Memory precision/recall benchmarks** (`user-derived`)
   - Label what should be stored, rejected, reviewed, retrieved, and preserved through compaction.
   - Acceptance: CI reports Candidate precision/recall and critical-constraint retention.
-  - Progress: deterministic Candidate and retrieval benchmarks now report the pre-compaction baseline; T10 must reuse the critical-constraint metric before this item is complete.
 
 ## P2 - Runtime Reliability
 

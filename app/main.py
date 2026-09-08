@@ -44,6 +44,7 @@ from app.schemas import (
     AgentTaskCreate,
     AgentTaskRead,
     AgentTaskUpdate,
+    ContextCompactionRead,
     AgentRunCreate,
     AgentRunRead,
     AgentRunRecoveryRead,
@@ -116,6 +117,7 @@ from app.services.agent_workflow import (
     start_agent_workflow,
 )
 from app.services.agent_run_recovery import recover_stale_agent_runs
+from app.services.context_compaction import compact_agent_context
 from app.services.memory_runtime import assemble_memory_context, resolve_memory_scope
 from app.services.memory_lifecycle import retire_memory, retire_task_working_memories
 from app.services.memory_versioning import record_initial_memory_version
@@ -477,6 +479,37 @@ def preview_agent_task_memory_context(
         run_id=run_id,
         memory_limit=memory_limit,
         memory_char_budget=memory_char_budget,
+    ).as_dict()
+
+
+@app.get(
+    "/agent/tasks/{task_id}/agent-runs/{run_id}/context-compaction",
+    response_model=ContextCompactionRead,
+)
+def preview_agent_run_context_compaction(
+    task_id: int,
+    run_id: int,
+    char_threshold: int = Query(default=6000, ge=0, le=50000),
+    recent_observation_tokens: int = Query(default=384, ge=1, le=10000),
+    session: Session = Depends(get_session),
+):
+    task = _get_agent_task_or_404(session, task_id)
+    run = session.get(AgentRun, run_id)
+    if not run or run.task_id != task.id:
+        raise HTTPException(status_code=404, detail="agent run not found for this task")
+    memory_context = assemble_memory_context(session, task, run_id=run.id).as_dict()
+    observations = [
+        step.observation for step in run.steps if step.observation is not None
+    ]
+    return compact_agent_context(
+        task,
+        run_id=run.id,
+        step_number=run.step_count + 1,
+        max_steps=run.max_steps,
+        memory_context=memory_context,
+        observations=observations,
+        char_threshold=char_threshold,
+        recent_observation_tokens=recent_observation_tokens,
     ).as_dict()
 
 

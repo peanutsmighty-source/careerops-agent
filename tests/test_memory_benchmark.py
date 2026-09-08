@@ -10,3 +10,4 @@ def test_memory_benchmark_meets_current_quality_floor():
     assert report.decision_accuracy >= 1.0
     assert report.retrieval_recall >= 1.0
     assert report.pre_compaction_critical_constraint_retention >= 1.0
+    assert report.post_compaction_critical_constraint_retention >= 1.0

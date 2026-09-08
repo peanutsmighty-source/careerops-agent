@@ -11,6 +11,7 @@ const state = {
   agentRuns: [],
   selectedAgentRun: null,
   memoryContext: null,
+  contextCompaction: null,
   memories: [],
   selectedMemory: null,
   recentlyCreatedMemoryId: null,
@@ -298,8 +299,11 @@ function renderAgentRuns() {
 
 function renderMemoryContext() {
   elements["memory-context-result"].textContent = state.memoryContext
-    ? JSON.stringify(state.memoryContext, null, 2)
-    : "选择任务后查看 GoalContract、选中记忆和上下文预算";
+    ? JSON.stringify({
+        memory_context: state.memoryContext,
+        context_compaction: state.contextCompaction,
+      }, null, 2)
+    : "选择任务后查看 GoalContract、选中记忆、上下文预算和压缩审计";
 }
 
 function taskMemories() {
@@ -480,9 +484,15 @@ async function refreshMemoryContext(showConfirmation = false) {
   setBusy(button, true, "刷新中");
   try {
     const runQuery = state.selectedAgentRun ? `?run_id=${state.selectedAgentRun.id}` : "";
-    state.memoryContext = await api(`/agent/tasks/${state.task.id}/memory-context${runQuery}`);
+    const compactionRequest = state.selectedAgentRun
+      ? api(`/agent/tasks/${state.task.id}/agent-runs/${state.selectedAgentRun.id}/context-compaction`)
+      : Promise.resolve(null);
+    [state.memoryContext, state.contextCompaction] = await Promise.all([
+      api(`/agent/tasks/${state.task.id}/memory-context${runQuery}`),
+      compactionRequest,
+    ]);
     renderMemoryContext();
-    if (showConfirmation) showToast("Memory Context 已重新装配");
+    if (showConfirmation) showToast("Context 与压缩审计已刷新");
   } catch (error) {
     showToast(error.message);
   } finally {
@@ -500,9 +510,10 @@ async function selectAgentRun(run) {
   } catch {
     state.selectedAgentRun = run;
   }
-  state.memoryContext = await api(
-    `/agent/tasks/${state.task.id}/memory-context?run_id=${run.id}`
-  );
+  [state.memoryContext, state.contextCompaction] = await Promise.all([
+    api(`/agent/tasks/${state.task.id}/memory-context?run_id=${run.id}`),
+    api(`/agent/tasks/${state.task.id}/agent-runs/${run.id}/context-compaction`),
+  ]);
   renderAgentRuns();
   renderMemoryContext();
   renderMemories();
@@ -556,6 +567,7 @@ async function loadTasks(preferredId = null) {
     state.agentRuns = [];
     state.selectedAgentRun = null;
     state.memoryContext = null;
+    state.contextCompaction = null;
     state.memories = [];
     state.selectedMemory = null;
     state.recentlyCreatedMemoryId = null;
@@ -586,6 +598,7 @@ async function selectTask(taskId) {
   state.agentRuns = agentRuns;
   state.selectedAgentRun = agentRuns[0] || null;
   state.memoryContext = memoryContext;
+  state.contextCompaction = null;
   state.memories = memories;
   state.selectedMemory = null;
   state.recentlyCreatedMemoryId = null;

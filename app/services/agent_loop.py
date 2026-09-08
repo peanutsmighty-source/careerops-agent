@@ -14,6 +14,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.database import SessionLocal
 from app.models import AgentRun, AgentRunStep, AgentTask, ExecutionTrace
 from app.services.authorization import get_or_create_task_policy
+from app.services.context_compaction import (
+    DEFAULT_COMPACTION_CHAR_THRESHOLD,
+    compact_agent_context,
+)
 from app.services.memory_evaluator import evaluate_and_store_run_memories
 from app.services.memory_lifecycle import retire_run_working_memories
 from app.services.memory_runtime import assemble_memory_context
@@ -57,6 +61,8 @@ class AgentModelRequest:
     tools: list[dict]
     step_number: int
     max_steps: int
+    execution_context: dict | None = None
+    context_compaction: dict | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -69,6 +75,13 @@ class AgentModelRequest:
             "tools": [tool["name"] for tool in self.tools],
             "step_number": self.step_number,
             "max_steps": self.max_steps,
+            "execution_context": self.execution_context or {},
+        }
+
+    def as_persisted_dict(self) -> dict:
+        return {
+            **self.as_dict(),
+            "context_compaction": self.context_compaction or {},
         }
 
 
@@ -257,10 +270,12 @@ class AgentLoopEngine:
         *,
         session_factory: Callable = SessionLocal,
         tool_runner: Callable = run_tool_call,
+        compaction_char_threshold: int = DEFAULT_COMPACTION_CHAR_THRESHOLD,
     ) -> None:
         self.model = model
         self.session_factory = session_factory
         self.tool_runner = tool_runner
+        self.compaction_char_threshold = compaction_char_threshold
         self._active_phase = "initialization"
 
     def run(self, run_id: int) -> None:
@@ -354,6 +369,15 @@ class AgentLoopEngine:
             policy = get_or_create_task_policy(session, task)
             context_started = perf_counter()
             memory_context = assemble_memory_context(session, task, run_id=run.id)
+            compaction = compact_agent_context(
+                task,
+                run_id=run.id,
+                step_number=run.step_count + 1,
+                max_steps=run.max_steps,
+                memory_context=memory_context.as_dict(),
+                observations=observations,
+                char_threshold=self.compaction_char_threshold,
+            )
             context_assembly_ms = _elapsed_ms(context_started)
             allowed = set(policy.allowed_tools)
             tools = [tool for tool in list_tools() if tool["name"] in allowed]
@@ -363,10 +387,12 @@ class AgentLoopEngine:
                 constraints=task.constraints,
                 success_criteria=task.success_criteria,
                 memory_context=memory_context.as_dict(),
-                observations=observations,
+                observations=compaction.model_observations,
                 tools=tools,
                 step_number=run.step_count + 1,
                 max_steps=run.max_steps,
+                execution_context=compaction.execution_context,
+                context_compaction=compaction.as_dict(),
             )
             return request, {
                 "context_assembly_ms": context_assembly_ms,
@@ -406,12 +432,33 @@ class AgentLoopEngine:
                 task_id=run.task_id,
                 sequence=sequence,
                 action_type=decision.action_type,
-                model_request=request.as_dict(),
+                model_request=request.as_persisted_dict(),
                 model_response=decision.as_dict(),
                 timing_json=step_timing,
             )
             run.step_count = sequence
             session.add(step)
+            if request.context_compaction and request.context_compaction.get("triggered"):
+                session.add(
+                    ExecutionTrace(
+                        task_id=run.task_id,
+                        event_type="context_compaction",
+                        status="applied",
+                        input_summary=(
+                            f"Compact context for Agent run {run.id}, step {sequence}."
+                        ),
+                        output_summary=(
+                            f"Reduced context from "
+                            f"{request.context_compaction['raw_char_count']} to "
+                            f"{request.context_compaction['compacted_char_count']} characters."
+                        ),
+                        metadata_json={
+                            "agent_run_id": run.id,
+                            "sequence": sequence,
+                            **request.context_compaction,
+                        },
+                    )
+                )
             session.add(
                 ExecutionTrace(
                     task_id=run.task_id,

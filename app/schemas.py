@@ -402,6 +402,17 @@ class MemoryContextRead(BaseModel):
     retrieval: dict
 
 
+class ContextCompactionRead(BaseModel):
+    triggered: bool
+    trigger_reason: str
+    raw_char_count: int
+    compacted_char_count: int
+    raw_input: dict
+    compacted_context: dict
+    retained_items: list[dict]
+    removed_items: list[dict]
+
+
 class AgentRunStepRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

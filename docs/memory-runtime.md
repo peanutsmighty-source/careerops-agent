@@ -159,11 +159,12 @@ Runtime Console 的 `MEMORY RUNTIME` 区域显示同一结果。它是预览，�
 - working memory 已有 task/run 作用域，并会在对应 Run/Task 终止时软退休；尚未实现自动总结和晋升。
 - Candidate Builder 目前支持 Run outcome 的 episodic 候选和结构化技能需求的 fact 候选；还没有模型驱动的自由文本 fact/preference 提取。
 - 当前审核已检查来源/作用域完整性、最小信息量、敏感值、规范化重复和可选 Embedding/模型语义重复；provenance 已验证的同 scope 工具事实支持自动 supersede，用户事实和模型提出的模糊冲突仍进入拒绝或人工复核，尚未实现人工冲突处理动作。
-- Context Compaction 尚未实现；实现后 Runtime Console 必须同时展示压缩前输入、压缩后 Context、保留项和丢弃/摘要原因。
-- 尚未实现后台 consolidation、遗忘和 context compaction。
+- Context Compaction 已在 AgentLoop 模型调用前接入：字符阈值触发后使用 LangChain `trim_messages` 保留近期 observation，并用确定性摘要替代较旧 observation；GoalContract、任务约束、完成动作、未解决 blocker、运行 ID 和下一动作是受保护字段。
+- Runtime Console 和 `GET /agent/tasks/{task_id}/agent-runs/{run_id}/context-compaction` 同时展示原始输入、压缩结果、保留项、移除项和原因；触发时完整审计还会持久化到 AgentRunStep 与 Trace。
+- 尚未实现 T11 token-aware 全请求预算、后台 consolidation 和遗忘。当前字符阈值只负责决定是否压缩，LangChain 的近似 token 计数只负责 observation trimming，不能当成模型级预算。
 
 ## 最小质量基线
 
 `python -m app.memory_benchmark` 在隔离的内存数据库中运行真实 Evaluator 和 Context assembler，不调用外部模型。当前标注覆盖可信 Runtime 候选、敏感值、信息不足、伪造 provenance、未知来源、需要语义复核的用户输入，以及相关、无关和过期 Memory。
 
-报告包含 Candidate precision/recall、三分类准确率、retrieval recall 和 `pre_compaction_critical_constraint_retention`。最后一项只是 T10 前的基线；实现 Context Compaction 后必须用同一关键约束标签测量压缩后结果，才能完成 T18。小型确定性样本得到 1.0 只能证明回归规则符合标签，不能代表真实分布上的泛化质量。
+报告包含 Candidate precision/recall、三分类准确率、retrieval recall，以及压缩前后的关键约束保留率。两项 retention 使用同一标签，验证关键约束通过 compactor 后仍完整存在。小型确定性样本得到 1.0 只能证明回归规则符合标签，不能代表真实分布上的泛化质量。

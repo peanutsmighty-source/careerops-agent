@@ -73,7 +73,7 @@ python -m coverage report -m
 python -m app.memory_benchmark
 ```
 
-The Memory benchmark prints labeled Candidate precision/recall, exact decision accuracy, retrieval recall, and the pre-compaction critical-constraint baseline. It is deterministic and does not call an external model.
+The Memory benchmark prints labeled Candidate precision/recall, exact decision accuracy, retrieval recall, and critical-constraint retention before and after Context Compaction. It is deterministic and does not call an external model.
 
 ## Debug a persisted tool call
 
