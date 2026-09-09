@@ -15,19 +15,32 @@ from app.database import SessionLocal
 from app.models import AgentRun, AgentRunStep, AgentTask, ExecutionTrace
 from app.services.authorization import get_or_create_task_policy
 from app.services.context_compaction import (
-    DEFAULT_COMPACTION_CHAR_THRESHOLD,
+    build_execution_context,
     compact_agent_context,
 )
 from app.services.memory_evaluator import evaluate_and_store_run_memories
 from app.services.memory_lifecycle import retire_run_working_memories
-from app.services.memory_runtime import assemble_memory_context
+from app.services.memory_runtime import (
+    DEFAULT_MEMORY_TOKEN_BUDGET,
+    assemble_memory_context,
+)
 from app.services.model_credentials import load_deepseek_api_key
+from app.services.token_budget import measure_context_budget
 from app.services.tool_runtime import run_tool_call, serialize_tool_call
 from app.services.tools import list_tools
 
 
 DEFAULT_OPENAI_MODEL = os.getenv("CAREEROPS_OPENAI_MODEL", "gpt-5-mini")
 DEFAULT_DEEPSEEK_MODEL = os.getenv("CAREEROPS_DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEFAULT_MODEL_CONTEXT_TOKENS = int(os.getenv("CAREEROPS_MODEL_CONTEXT_TOKENS", "8192"))
+DEFAULT_RESERVED_OUTPUT_TOKENS = int(
+    os.getenv("CAREEROPS_RESERVED_OUTPUT_TOKENS", "1024")
+)
+AGENT_SYSTEM_INSTRUCTIONS = (
+    "You are the CareerOps single-agent planner. Choose at most one tool per turn. "
+    "Use tools only when their observations are needed. When the task can be answered, "
+    "return a concise final answer. Never claim permissions or invent tool results."
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +76,7 @@ class AgentModelRequest:
     max_steps: int
     execution_context: dict | None = None
     context_compaction: dict | None = None
+    context_token_budget: dict | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -82,7 +96,16 @@ class AgentModelRequest:
         return {
             **self.as_dict(),
             "context_compaction": self.context_compaction or {},
+            "context_token_budget": self.context_token_budget or {},
         }
+
+    @property
+    def reserved_output_tokens(self) -> int:
+        return int(
+            (self.context_token_budget or {}).get(
+                "reserved_output_tokens", DEFAULT_RESERVED_OUTPUT_TOKENS
+            )
+        )
 
 
 class AgentModel(Protocol):
@@ -138,12 +161,9 @@ class OpenAIResponsesAgentModel:
     def decide(self, request: AgentModelRequest) -> AgentDecision:
         response = self._client.responses.create(
             model=self.model,
-            instructions=(
-                "You are the CareerOps single-agent planner. Choose at most one tool per turn. "
-                "Use tools only when their observations are needed. When the task can be answered, "
-                "return a concise final answer. Never claim permissions or invent tool results."
-            ),
+            instructions=AGENT_SYSTEM_INSTRUCTIONS,
             input=json.dumps(request.as_dict(), ensure_ascii=False),
+            max_output_tokens=request.reserved_output_tokens,
             tools=[
                 {
                     "type": "function",
@@ -155,6 +175,12 @@ class OpenAIResponsesAgentModel:
                 for tool in request.tools
             ],
         )
+        usage = getattr(response, "usage", None)
+        metadata = {
+            "response_id": response.id,
+            "prompt_tokens": usage.input_tokens if usage else 0,
+            "completion_tokens": usage.output_tokens if usage else 0,
+        }
         for item in response.output:
             if item.type == "function_call":
                 return AgentDecision(
@@ -162,13 +188,13 @@ class OpenAIResponsesAgentModel:
                     tool_name=item.name,
                     arguments=json.loads(item.arguments),
                     call_id=item.call_id,
-                    provider_metadata={"response_id": response.id},
+                    provider_metadata=metadata,
                 )
         if response.output_text:
             return AgentDecision(
                 action_type="final_answer",
                 content=response.output_text,
-                provider_metadata={"response_id": response.id},
+                provider_metadata=metadata,
             )
         raise ValueError("model returned neither a tool call nor a final answer")
 
@@ -191,12 +217,7 @@ class DeepSeekChatAgentModel:
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You are the CareerOps single-agent planner. Choose at most one "
-                        "tool per turn. Use tools only when their observations are needed. "
-                        "When the task can be answered, return a concise final answer. "
-                        "Never claim permissions or invent tool results."
-                    ),
+                    "content": AGENT_SYSTEM_INSTRUCTIONS,
                 },
                 {
                     "role": "user",
@@ -214,6 +235,7 @@ class DeepSeekChatAgentModel:
                 }
                 for tool in request.tools
             ],
+            max_tokens=request.reserved_output_tokens,
         )
         message = response.choices[0].message
         usage = response.usage
@@ -270,12 +292,24 @@ class AgentLoopEngine:
         *,
         session_factory: Callable = SessionLocal,
         tool_runner: Callable = run_tool_call,
-        compaction_char_threshold: int = DEFAULT_COMPACTION_CHAR_THRESHOLD,
+        model_context_tokens: int = DEFAULT_MODEL_CONTEXT_TOKENS,
+        reserved_output_tokens: int = DEFAULT_RESERVED_OUTPUT_TOKENS,
+        memory_token_budget: int = DEFAULT_MEMORY_TOKEN_BUDGET,
     ) -> None:
         self.model = model
         self.session_factory = session_factory
         self.tool_runner = tool_runner
-        self.compaction_char_threshold = compaction_char_threshold
+        if model_context_tokens < 1:
+            raise ValueError("model_context_tokens must be positive")
+        if reserved_output_tokens < 1 or reserved_output_tokens >= model_context_tokens:
+            raise ValueError(
+                "reserved_output_tokens must be positive and smaller than model_context_tokens"
+            )
+        if memory_token_budget < 0:
+            raise ValueError("memory_token_budget cannot be negative")
+        self.model_context_tokens = model_context_tokens
+        self.reserved_output_tokens = reserved_output_tokens
+        self.memory_token_budget = memory_token_budget
         self._active_phase = "initialization"
 
     def run(self, run_id: int) -> None:
@@ -368,7 +402,63 @@ class AgentLoopEngine:
             observations = [step.observation for step in run.steps if step.observation is not None]
             policy = get_or_create_task_policy(session, task)
             context_started = perf_counter()
-            memory_context = assemble_memory_context(session, task, run_id=run.id)
+            allowed = set(policy.allowed_tools)
+            tools = [tool for tool in list_tools() if tool["name"] in allowed]
+            execution_context = build_execution_context(
+                task,
+                run_id=run.id,
+                step_number=run.step_count + 1,
+                max_steps=run.max_steps,
+            )
+            prompt = _model_prompt_context(
+                task,
+                run=run,
+                execution_context=execution_context,
+                tools=tools,
+            )
+            empty_memory_context = assemble_memory_context(
+                session,
+                task,
+                run_id=run.id,
+                memory_token_budget=0,
+            )
+            base_budget = measure_context_budget(
+                model_context_tokens=self.model_context_tokens,
+                reserved_output_tokens=self.reserved_output_tokens,
+                prompt=prompt,
+                memory_context=empty_memory_context.as_dict(),
+                tools=tools,
+                observations=[],
+            )
+            if not base_budget.within_budget:
+                raise ValueError(
+                    "protected prompt and tool schemas exceed the configured model input budget"
+                )
+            available_after_base = (
+                base_budget.input_token_budget - base_budget.estimated_input_tokens
+            )
+            allocated_memory_tokens = min(
+                self.memory_token_budget,
+                max(available_after_base // 3, 0),
+            )
+            memory_context = assemble_memory_context(
+                session,
+                task,
+                run_id=run.id,
+                memory_token_budget=allocated_memory_tokens,
+            )
+            fixed_budget = measure_context_budget(
+                model_context_tokens=self.model_context_tokens,
+                reserved_output_tokens=self.reserved_output_tokens,
+                prompt=prompt,
+                memory_context=memory_context.as_dict(),
+                tools=tools,
+                observations=[],
+            )
+            observation_token_budget = max(
+                fixed_budget.input_token_budget - fixed_budget.estimated_input_tokens,
+                0,
+            )
             compaction = compact_agent_context(
                 task,
                 run_id=run.id,
@@ -376,11 +466,20 @@ class AgentLoopEngine:
                 max_steps=run.max_steps,
                 memory_context=memory_context.as_dict(),
                 observations=observations,
-                char_threshold=self.compaction_char_threshold,
+                observation_token_budget=observation_token_budget,
             )
+            context_token_budget = measure_context_budget(
+                model_context_tokens=self.model_context_tokens,
+                reserved_output_tokens=self.reserved_output_tokens,
+                prompt=prompt,
+                memory_context=memory_context.as_dict(),
+                tools=tools,
+                observations=compaction.model_observations,
+                raw_observations=observations,
+            )
+            if not context_token_budget.within_budget:
+                raise ValueError("context assembly exceeded the configured model input budget")
             context_assembly_ms = _elapsed_ms(context_started)
-            allowed = set(policy.allowed_tools)
-            tools = [tool for tool in list_tools() if tool["name"] in allowed]
             request = AgentModelRequest(
                 task_id=task.id,
                 user_goal=task.user_goal,
@@ -393,6 +492,7 @@ class AgentLoopEngine:
                 max_steps=run.max_steps,
                 execution_context=compaction.execution_context,
                 context_compaction=compaction.as_dict(),
+                context_token_budget=context_token_budget.as_dict(),
             )
             return request, {
                 "context_assembly_ms": context_assembly_ms,
@@ -448,9 +548,10 @@ class AgentLoopEngine:
                             f"Compact context for Agent run {run.id}, step {sequence}."
                         ),
                         output_summary=(
-                            f"Reduced context from "
-                            f"{request.context_compaction['raw_char_count']} to "
-                            f"{request.context_compaction['compacted_char_count']} characters."
+                            f"Reduced observations from "
+                            f"{request.context_compaction['raw_observation_tokens']} to "
+                            f"{request.context_token_budget['sections']['observation_tokens']} "
+                            f"estimated tokens."
                         ),
                         metadata_json={
                             "agent_run_id": run.id,
@@ -476,6 +577,7 @@ class AgentLoopEngine:
                         "provider": run.provider,
                         "model": run.model,
                         "action": decision.as_dict(),
+                        "context_token_budget": request.context_token_budget,
                         "timing": step_timing,
                     },
                 )
@@ -577,7 +679,11 @@ class AgentLoopEngine:
                 reason="agent_run_completed",
             )
             memory_finalize_ms = _elapsed_ms(finalize_started)
-            _finalize_run_timing(run, memory_finalize_ms=memory_finalize_ms)
+            _finalize_run_timing(
+                run,
+                memory_finalize_ms=memory_finalize_ms,
+                evaluator_usage=_aggregate_evaluator_usage(memory_evaluations),
+            )
             for evaluation in memory_evaluations:
                 memory = evaluation.memory
                 candidate = evaluation.candidate
@@ -713,6 +819,7 @@ def _finalize_run_timing(
     *,
     memory_finalize_ms: float = 0,
     failed_phase: str | None = None,
+    evaluator_usage: dict[str, int] | None = None,
 ) -> None:
     run.completed_at = datetime.utcnow()
     step_timings = [step.timing_json or {} for step in run.steps]
@@ -740,10 +847,82 @@ def _finalize_run_timing(
         "tool_call_ms": tool_call_ms,
         "memory_finalize_ms": memory_finalize_ms,
         "unattributed_ms": round(max(wall_clock_ms - attributed_ms, 0), 3),
+        "token_usage": _aggregate_run_token_usage(
+            run, evaluator_usage=evaluator_usage or {}
+        ),
     }
     if failed_phase:
         timing["failed_phase"] = failed_phase
     run.timing_json = timing
+
+
+def _model_prompt_context(
+    task: AgentTask, *, run: AgentRun, execution_context: dict, tools: list[dict]
+) -> dict:
+    return {
+        "system_instructions": AGENT_SYSTEM_INSTRUCTIONS,
+        "task_id": task.id,
+        "user_goal": task.user_goal,
+        "constraints": task.constraints,
+        "success_criteria": task.success_criteria,
+        "step_number": run.step_count + 1,
+        "max_steps": run.max_steps,
+        "execution_context": execution_context,
+        "tool_names_in_request": [tool["name"] for tool in tools],
+        "memory_context": "measured_as_memory_section",
+        "observations": "measured_as_observation_section",
+    }
+
+
+def _aggregate_evaluator_usage(memory_evaluations) -> dict[str, int]:
+    totals: dict[str, int] = {
+        "model_calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "embedding_calls": 0,
+        "embedding_tokens": 0,
+    }
+    for evaluation in memory_evaluations:
+        for key, value in (evaluation.evaluator_usage or {}).items():
+            totals[key] = totals.get(key, 0) + int(value)
+    return totals
+
+
+def _aggregate_run_token_usage(
+    run: AgentRun, *, evaluator_usage: dict[str, int]
+) -> dict:
+    context_sections = {
+        "prompt_tokens": 0,
+        "memory_tokens": 0,
+        "tool_tokens": 0,
+        "observation_tokens": 0,
+    }
+    estimated_input_tokens = 0
+    provider_prompt_tokens = 0
+    provider_completion_tokens = 0
+    compaction = {"input_tokens": 0, "output_tokens": 0, "saved_tokens": 0}
+    for step in run.steps:
+        budget = (step.model_request or {}).get("context_token_budget") or {}
+        estimated_input_tokens += int(budget.get("estimated_input_tokens", 0))
+        for key in context_sections:
+            context_sections[key] += int((budget.get("sections") or {}).get(key, 0))
+        for key in compaction:
+            compaction[key] += int((budget.get("compaction") or {}).get(key, 0))
+        provider = (step.model_response or {}).get("provider_metadata") or {}
+        provider_prompt_tokens += int(provider.get("prompt_tokens", 0))
+        provider_completion_tokens += int(provider.get("completion_tokens", 0))
+    return {
+        "context": {
+            "estimated_input_tokens": estimated_input_tokens,
+            **context_sections,
+        },
+        "agent_model": {
+            "provider_prompt_tokens": provider_prompt_tokens,
+            "provider_completion_tokens": provider_completion_tokens,
+        },
+        "compaction": compaction,
+        "evaluator": evaluator_usage,
+    }
 
 
 def json_safe(value):

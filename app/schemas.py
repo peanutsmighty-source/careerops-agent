@@ -407,6 +407,10 @@ class ContextCompactionRead(BaseModel):
     trigger_reason: str
     raw_char_count: int
     compacted_char_count: int
+    raw_token_count: int
+    compacted_token_count: int
+    raw_observation_tokens: int
+    observation_token_budget: int
     raw_input: dict
     compacted_context: dict
     retained_items: list[dict]

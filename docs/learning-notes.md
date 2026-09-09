@@ -215,4 +215,16 @@ Memory 是持久化候选信息，Context 是某次模型调用临时选择出�
 - 压缩的目标是减少一次模型调用的临时输入；原始输入仍进入持久化审计，不能把 compaction 当成删除历史。
 - CareerOps 用 LangChain `trim_messages` 选择近期 observation，自身负责触发阈值、受保护字段、确定性摘要、持久化和 UI；因此不需要把项目上下文交给外部总结模型。
 - 摘要保留 tool call、trace、plan step 等 ID 和结果预览，使模型仍能连接因果链；详细旧内容只留在 `removed_items` 审计中。
-- 主要陷阱是把字符触发阈值误称为完整 token 预算。工具 schema、系统指令等尚未计入，本阶段只完成 T10，模型级预算留给 T11。
+- T10 先验证哪些字段可压缩、哪些必须保护；T11 再把 prompt、Memory、工具 schema 和 observations 纳入统一预算。
+
+## 21. Token-aware Context Budget
+
+例如模型有 8192-token Context 时，不能让输入占满 8192；Runtime 需要先为回答或工具调用预留 1024，再在剩余 7168 中安排 prompt、Memory、工具 schema 和 observations。
+
+- T11 使用同一个本地近似计数器做调用前预检，并把每个输入分区写入 `context_token_budget`；字符数不再决定 Memory 选择或 compaction 触发。
+- 分配顺序体现控制优先级：受保护 prompt 和工具 schema 先占预算，Memory 使用有上限的 token 配额，observations 使用剩余空间并在必要时压缩。受保护部分本身放不下时必须在调用模型前失败。
+- 估算 token 与供应商真实 usage 分开记录：前者用于阻止超预算请求，后者用于成本核算和校准；Evaluator/Embedding usage 也独立汇总，不能混入主 Agent 模型消耗。
+- 实现难点是压缩摘要本身也占 token。Compactor 会逐步移除较旧原文、去掉 outcome preview、减少摘要明细，必要时只保留结构化受保护状态，直到 observation 分区真正满足配额。
+- 当前仍使用通用近似 tokenizer，不能保证与每个供应商完全一致；生产环境应增加模型专用计数器和安全余量。
+
+面试题：为什么只记录模型 API 返回的 `prompt_tokens` 还不够？回答要点：供应商 usage 只在调用后可见，无法阻止请求事前超窗；Runtime 需要调用前估算做 admission control，再用调用后真实 usage 做计费、监控和估算误差校准。

@@ -64,6 +64,18 @@ key file outside the repository. DeepSeek is used for Agent decisions and JSON
 semantic evaluation. The project does not treat its chat endpoint as an
 Embedding API.
 
+### Context token budget
+
+Every Agent model request is estimated before dispatch and split into prompt,
+Memory, tool-schema, and observation token usage. The default context budget is
+8192 tokens with 1024 reserved for model output. Override these process-level
+defaults with `CAREEROPS_MODEL_CONTEXT_TOKENS` and
+`CAREEROPS_RESERVED_OUTPUT_TOKENS`. The Runtime fails before the model call if
+protected prompt and tool schemas cannot fit; otherwise Memory is selected by a
+token quota and observations are compacted into the remaining input budget.
+Provider-reported usage is recorded after the call and kept separate from
+Memory Evaluator usage.
+
 ## Test
 
 ```powershell
@@ -141,7 +153,8 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `GET /agent/tasks/{task_id}/agent-runs`: inspect model steps, observations, and stop reasons.
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/checkpoints`: inspect the outer workflow's Node-level State history.
 - `POST /agent/tasks/{task_id}/recover-agent-runs`: classify and recover stale AgentRuns without blindly repeating ambiguous tools.
-- `GET /agent/tasks/{task_id}/memory-context`: preview the GoalContract, selected non-expired memories, and context budget for the next model call.
+- `GET /agent/tasks/{task_id}/memory-context`: preview the GoalContract and selected non-expired memories; `memory_token_budget` limits the Memory portion.
+- `GET /agent/tasks/{task_id}/agent-runs/{run_id}/context-compaction`: inspect token-aware observation compaction and its raw/retained/removed audit.
 - `GET /agent/memory-candidates`: inspect accepted, rejected, and review-required Candidate decisions with provenance and storage outcomes.
 
 The parser is intentionally deterministic for now. It extracts company, title, location, and a first set of AI/Agent engineering skills such as Python, FastAPI, LangGraph, RAG, Docker, Kubernetes, and evaluation-related requirements.

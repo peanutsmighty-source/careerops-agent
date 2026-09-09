@@ -298,10 +298,12 @@ function renderAgentRuns() {
 }
 
 function renderMemoryContext() {
+  const latestStep = state.selectedAgentRun?.steps?.at(-1);
   elements["memory-context-result"].textContent = state.memoryContext
     ? JSON.stringify({
         memory_context: state.memoryContext,
         context_compaction: state.contextCompaction,
+        context_token_budget: latestStep?.model_request?.context_token_budget || null,
       }, null, 2)
     : "选择任务后查看 GoalContract、选中记忆、上下文预算和压缩审计";
 }

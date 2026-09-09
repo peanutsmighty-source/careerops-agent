@@ -106,12 +106,14 @@ def test_context_compaction_is_observable_and_preserves_protected_fields(client)
 
     preview = client.get(
         f"/agent/tasks/{task_payload['id']}/agent-runs/{run_id}/context-compaction",
-        params={"char_threshold": 800, "recent_observation_tokens": 120},
+        params={"observation_token_budget": 120},
     )
     assert preview.status_code == 200
     audit = preview.json()
     assert audit["triggered"] is True
     assert audit["raw_char_count"] > audit["compacted_char_count"]
+    assert audit["raw_observation_tokens"] > audit["observation_token_budget"]
+    assert audit["raw_token_count"] > audit["compacted_token_count"]
     assert audit["raw_input"]["goal_contract"] == audit["compacted_context"][
         "goal_contract"
     ]
@@ -131,7 +133,12 @@ def test_context_compaction_is_observable_and_preserves_protected_fields(client)
         for item in audit["retained_items"]
     )
 
-    AgentLoopEngine(model, compaction_char_threshold=800).run(run_id)
+    AgentLoopEngine(
+        model,
+        model_context_tokens=1400,
+        reserved_output_tokens=200,
+        memory_token_budget=128,
+    ).run(run_id)
 
     run = client.get(f"/agent/tasks/{task_payload['id']}/agent-runs").json()[0]
     persisted = run["steps"][-1]["model_request"]

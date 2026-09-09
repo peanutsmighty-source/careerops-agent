@@ -224,7 +224,7 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
             session,
             task,
             memory_limit=2,
-            memory_char_budget=1000,
+            memory_token_budget=256,
             now=benchmark_now,
         )
         retrieved_keys = {memory["memory_key"] for memory in context.memories}
@@ -243,8 +243,7 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
                     "output": {"detail": "old observation " * 200},
                 }
             ],
-            char_threshold=0,
-            recent_observation_tokens=1,
+            observation_token_budget=1,
         )
         compacted_keys = {
             memory["memory_key"]

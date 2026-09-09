@@ -95,6 +95,9 @@ def test_deepseek_agent_model_converts_tool_call_without_exposing_credentials():
     assert decision.tool_name == "search_jobs"
     assert decision.arguments == {"query": "Agent", "limit": 3}
     assert captured["model"] == "deepseek-test"
+    assert captured["max_tokens"] == 1024
+    assert decision.provider_metadata["prompt_tokens"] == 41
+    assert decision.provider_metadata["completion_tokens"] == 9
     assert "api_key" not in json.dumps(captured)
 
 

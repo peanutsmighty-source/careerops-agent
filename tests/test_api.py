@@ -388,23 +388,25 @@ def test_memory_context_filters_expired_memory_and_respects_budget(client):
         assert client.post("/agent/memories", json=payload).status_code == 201
     response = client.get(
         f"/agent/tasks/{task['id']}/memory-context"
-        "?memory_limit=1&memory_char_budget=200"
+        "?memory_limit=1&memory_token_budget=80"
     )
 
     assert response.status_code == 200
     context = response.json()
     assert context["goal_contract"]["id"] == task["goal_contract_id"]
     assert [memory["memory_key"] for memory in context["memories"]] == ["target-role"]
+    assert 0 < context["retrieval"]["tokens_used"] <= 80
     assert context["retrieval"] == {
         "candidate_count": 2,
         "selected_count": 1,
         "excluded_expired_count": 1,
-        "char_budget": 200,
-        "chars_used": len("target-role") + len("The target role is AI Agent engineer."),
+        "token_budget": 80,
+        "tokens_used": context["retrieval"]["tokens_used"],
+        "token_estimator": "langchain_count_tokens_approximately_v1",
     }
 
     empty = client.get(
-        f"/agent/tasks/{task['id']}/memory-context?memory_char_budget=0"
+        f"/agent/tasks/{task['id']}/memory-context?memory_token_budget=0"
     ).json()
     assert empty["memories"] == []
 

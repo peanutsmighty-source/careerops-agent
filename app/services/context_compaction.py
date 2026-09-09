@@ -7,9 +7,9 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages.utils import count_tokens_approximately, trim_messages
 
 from app.models import AgentTask
+from app.services.token_budget import estimate_tokens
 
 
-DEFAULT_COMPACTION_CHAR_THRESHOLD = 6000
 DEFAULT_RECENT_OBSERVATION_TOKENS = 384
 
 
@@ -23,6 +23,10 @@ class ContextCompactionResult:
     removed_items: list[dict]
     raw_char_count: int
     compacted_char_count: int
+    raw_token_count: int
+    compacted_token_count: int
+    raw_observation_tokens: int
+    observation_token_budget: int
 
     @property
     def model_observations(self) -> list[dict]:
@@ -38,6 +42,10 @@ class ContextCompactionResult:
             "trigger_reason": self.trigger_reason,
             "raw_char_count": self.raw_char_count,
             "compacted_char_count": self.compacted_char_count,
+            "raw_token_count": self.raw_token_count,
+            "compacted_token_count": self.compacted_token_count,
+            "raw_observation_tokens": self.raw_observation_tokens,
+            "observation_token_budget": self.observation_token_budget,
             "raw_input": self.raw_context,
             "compacted_context": self.compacted_context,
             "retained_items": self.retained_items,
@@ -53,13 +61,10 @@ def compact_agent_context(
     max_steps: int,
     memory_context: dict,
     observations: list[dict],
-    char_threshold: int = DEFAULT_COMPACTION_CHAR_THRESHOLD,
-    recent_observation_tokens: int = DEFAULT_RECENT_OBSERVATION_TOKENS,
+    observation_token_budget: int = DEFAULT_RECENT_OBSERVATION_TOKENS,
 ) -> ContextCompactionResult:
-    if char_threshold < 0 or recent_observation_tokens < 1:
-        raise ValueError(
-            "char_threshold must be non-negative and recent_observation_tokens positive"
-        )
+    if observation_token_budget < 0:
+        raise ValueError("observation_token_budget cannot be negative")
 
     execution_context = _execution_context(
         task, run_id=run_id, step_number=step_number, max_steps=max_steps
@@ -78,11 +83,13 @@ def compact_agent_context(
         "observations": observations,
     }
     raw_char_count = _json_chars(raw_context)
+    raw_token_count = estimate_tokens(raw_context)
+    raw_observation_tokens = estimate_tokens(observations)
     protected_items = _protected_items(raw_context)
-    if raw_char_count <= char_threshold or not observations:
+    if raw_observation_tokens <= observation_token_budget or not observations:
         return ContextCompactionResult(
             triggered=False,
-            trigger_reason="below_char_threshold" if observations else "no_observations",
+            trigger_reason="within_observation_token_budget" if observations else "no_observations",
             raw_context=raw_context,
             compacted_context=raw_context,
             retained_items=[
@@ -91,7 +98,7 @@ def compact_agent_context(
                     {
                         "kind": "observation",
                         "index": index,
-                        "reason": "below_char_threshold",
+                        "reason": "within_observation_token_budget",
                     }
                     for index in range(len(observations))
                 ],
@@ -99,54 +106,26 @@ def compact_agent_context(
             removed_items=[],
             raw_char_count=raw_char_count,
             compacted_char_count=raw_char_count,
+            raw_token_count=raw_token_count,
+            compacted_token_count=raw_token_count,
+            raw_observation_tokens=raw_observation_tokens,
+            observation_token_budget=observation_token_budget,
         )
 
-    messages = [
-        HumanMessage(
-            id=f"observation:{index}",
-            content=json.dumps(observation, ensure_ascii=False, sort_keys=True),
-        )
-        for index, observation in enumerate(observations)
-    ]
-    trimmed = trim_messages(
-        messages,
-        max_tokens=recent_observation_tokens,
-        token_counter=count_tokens_approximately,
-        strategy="last",
-        allow_partial=False,
-    )
-    retained_indexes = {
-        int(message.id.split(":", 1)[1])
-        for message in trimmed
-        if message.id and message.id.startswith("observation:")
-    }
-    removed_indexes = [
-        index for index in range(len(observations)) if index not in retained_indexes
-    ]
-    compacted_observations = (
-        [
-            {
-                "kind": "compacted_observation_summary",
-                "summary": _summarize_observations(
-                    [observations[index] for index in removed_indexes]
-                ),
-            }
-        ]
-        if removed_indexes
-        else []
-    )
-    compacted_observations.extend(
-        observations[index] for index in sorted(retained_indexes)
+    compacted_observations, retained_indexes, removed_indexes = _compact_observations(
+        observations, observation_token_budget
     )
     compacted_context = {
         **raw_context,
         "observations": compacted_observations,
     }
+    summary_created = bool(
+        compacted_observations
+        and compacted_observations[0].get("kind") == "compacted_observation_summary"
+    )
     return ContextCompactionResult(
-        triggered=bool(removed_indexes),
-        trigger_reason=(
-            "char_threshold_exceeded" if removed_indexes else "nothing_trimmed"
-        ),
+        triggered=True,
+        trigger_reason="observation_token_budget_exceeded",
         raw_context=raw_context,
         compacted_context=compacted_context,
         retained_items=[
@@ -157,21 +136,117 @@ def compact_agent_context(
                     "index": index,
                     "reason": "recent_observation",
                 }
-                for index in sorted(retained_indexes)
+                for index in retained_indexes
             ],
         ],
         removed_items=[
             {
                 "kind": "observation",
                 "index": index,
-                "reason": "summarized_old_observation",
+                "reason": (
+                    "summarized_old_observation"
+                    if summary_created
+                    else "removed_to_fit_observation_budget"
+                ),
                 "content": observations[index],
             }
             for index in removed_indexes
         ],
         raw_char_count=raw_char_count,
         compacted_char_count=_json_chars(compacted_context),
+        raw_token_count=raw_token_count,
+        compacted_token_count=estimate_tokens(compacted_context),
+        raw_observation_tokens=raw_observation_tokens,
+        observation_token_budget=observation_token_budget,
     )
+
+
+def build_execution_context(
+    task: AgentTask, *, run_id: int, step_number: int, max_steps: int
+) -> dict:
+    return _execution_context(
+        task, run_id=run_id, step_number=step_number, max_steps=max_steps
+    )
+
+
+def _compact_observations(
+    observations: list[dict], token_budget: int
+) -> tuple[list[dict], list[int], list[int]]:
+    messages = [
+        HumanMessage(
+            id=f"observation:{index}",
+            content=json.dumps(observation, ensure_ascii=False, sort_keys=True),
+        )
+        for index, observation in enumerate(observations)
+    ]
+    trimmed = (
+        trim_messages(
+            messages,
+            max_tokens=token_budget,
+            token_counter=count_tokens_approximately,
+            strategy="last",
+            allow_partial=False,
+        )
+        if token_budget
+        else []
+    )
+    retained_indexes = sorted({
+        int(message.id.split(":", 1)[1])
+        for message in trimmed
+        if message.id and message.id.startswith("observation:")
+    })
+    removed_indexes = sorted(
+        index for index in range(len(observations)) if index not in retained_indexes
+    )
+    include_preview = True
+    summary_item_limit = len(removed_indexes)
+
+    while True:
+        compacted = _build_compacted_observations(
+            observations,
+            retained_indexes,
+            removed_indexes,
+            include_preview=include_preview,
+            summary_item_limit=summary_item_limit,
+        )
+        if estimate_tokens(compacted) <= token_budget:
+            return compacted, retained_indexes, removed_indexes
+        if retained_indexes:
+            removed_indexes.append(retained_indexes.pop(0))
+            removed_indexes.sort()
+            summary_item_limit = len(removed_indexes)
+            continue
+        if include_preview:
+            include_preview = False
+            continue
+        if summary_item_limit:
+            summary_item_limit -= 1
+            continue
+        return [], retained_indexes, removed_indexes
+
+
+def _build_compacted_observations(
+    observations: list[dict],
+    retained_indexes: list[int],
+    removed_indexes: list[int],
+    *,
+    include_preview: bool,
+    summary_item_limit: int,
+) -> list[dict]:
+    compacted = []
+    if removed_indexes:
+        compacted.append(
+            {
+                "kind": "compacted_observation_summary",
+                "summary": _summarize_observations(
+                    [observations[index] for index in removed_indexes],
+                    include_preview=include_preview,
+                    item_limit=summary_item_limit,
+                ),
+            }
+        )
+    compacted.extend(observations[index] for index in retained_indexes)
+    return compacted
 
 
 def _execution_context(
@@ -231,9 +306,13 @@ def _protected_items(raw_context: dict) -> list[dict]:
     ]
 
 
-def _summarize_observations(observations: list[dict]) -> dict:
+def _summarize_observations(
+    observations: list[dict], *, include_preview: bool, item_limit: int
+) -> dict:
+    summarized = observations[-item_limit:] if item_limit else []
     return {
         "observation_count": len(observations),
+        "omitted_detail_count": len(observations) - len(summarized),
         "items": [
             {
                 "tool_call_id": observation.get("tool_call_id"),
@@ -241,13 +320,19 @@ def _summarize_observations(observations: list[dict]) -> dict:
                 "plan_step_id": observation.get("plan_step_id"),
                 "tool_name": observation.get("tool_name"),
                 "status": observation.get("status"),
-                "outcome_preview": _preview(
-                    observation.get("output")
-                    if observation.get("output") is not None
-                    else observation.get("error")
+                **(
+                    {
+                        "outcome_preview": _preview(
+                            observation.get("output")
+                            if observation.get("output") is not None
+                            else observation.get("error")
+                        )
+                    }
+                    if include_preview
+                    else {}
                 ),
             }
-            for observation in observations
+            for observation in summarized
         ],
     }
 

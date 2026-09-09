@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 8 complete and 10 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **18 capabilities**: 9 complete and 9 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -47,7 +47,7 @@ Tracked count: **18 capabilities**: 8 complete and 10 open. Sources: 8 `user-dir
   - Show raw input, compacted Context, retained items, removed items, and reasons.
   - Acceptance: GoalContract, constraints, completed actions, unresolved blockers, IDs, and next action survive compaction tests.
 
-- [ ] **T11 Replace character budget with token-aware budgeting** (`roadmap`)
+- [x] **T11 Replace character budget with token-aware budgeting** (`roadmap`)
   - Track prompt, memory, evaluator, and compaction token usage separately.
   - Acceptance: context assembly stays below a configured model budget.
 

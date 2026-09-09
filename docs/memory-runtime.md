@@ -62,7 +62,7 @@ Memory 有 `active` 和 `retired` 两个状态。Context 只召回 active Memory
   -> 读取 contract Memory、当前 task Memory 和当前 run Memory
   -> 排除 expires_at 已到期的记录
   -> 根据 importance、memory_type 和任务关键词相关性排序
-  -> 应用 memory_limit 和 memory_char_budget
+  -> 应用 memory_limit 和 memory_token_budget
   -> 把结果放入 AgentModelRequest.memory_context
 ```
 
@@ -134,7 +134,7 @@ GET /agent/tasks/{task_id}/memory-context
 可选参数：
 
 - `memory_limit`：最多选择多少条记忆。
-- `memory_char_budget`：记忆 key 和 content 可占用的最大字符数。
+- `memory_token_budget`：选中 Memory 序列可占用的最大估算 token 数。
 
 Runtime Console 的 `MEMORY RUNTIME` 区域显示同一结果。它是预览，不会调用模型，也不会修改记忆。
 
@@ -155,13 +155,33 @@ Runtime Console 的 `MEMORY RUNTIME` 区域显示同一结果。它是预览，�
 ## 当前限制
 
 - 相关性还是词法匹配，没有 embedding 和混合检索。
-- 字符预算只是 token 预算的确定性近似。
+- token 预算使用 LangChain 的本地近似计数器，适合模型调用前的确定性预检；供应商返回的真实 usage 会在调用后单独记录，两者可能因 tokenizer 和消息包装不同而有偏差。
 - working memory 已有 task/run 作用域，并会在对应 Run/Task 终止时软退休；尚未实现自动总结和晋升。
 - Candidate Builder 目前支持 Run outcome 的 episodic 候选和结构化技能需求的 fact 候选；还没有模型驱动的自由文本 fact/preference 提取。
 - 当前审核已检查来源/作用域完整性、最小信息量、敏感值、规范化重复和可选 Embedding/模型语义重复；provenance 已验证的同 scope 工具事实支持自动 supersede，用户事实和模型提出的模糊冲突仍进入拒绝或人工复核，尚未实现人工冲突处理动作。
-- Context Compaction 已在 AgentLoop 模型调用前接入：字符阈值触发后使用 LangChain `trim_messages` 保留近期 observation，并用确定性摘要替代较旧 observation；GoalContract、任务约束、完成动作、未解决 blocker、运行 ID 和下一动作是受保护字段。
+- Context Compaction 已在 AgentLoop 模型调用前接入：observation 超过所分配的 token 预算后使用 LangChain `trim_messages` 保留近期内容，并用确定性摘要替代较旧 observation；GoalContract、任务约束、完成动作、未解决 blocker、运行 ID 和下一动作是受保护字段。
 - Runtime Console 和 `GET /agent/tasks/{task_id}/agent-runs/{run_id}/context-compaction` 同时展示原始输入、压缩结果、保留项、移除项和原因；触发时完整审计还会持久化到 AgentRunStep 与 Trace。
-- 尚未实现 T11 token-aware 全请求预算、后台 consolidation 和遗忘。当前字符阈值只负责决定是否压缩，LangChain 的近似 token 计数只负责 observation trimming，不能当成模型级预算。
+- 尚未实现后台 consolidation、遗忘和分层压缩。
+
+## Token-aware Context 预算
+
+AgentLoop 在调用模型前使用同一近似计数器拆分并记录四个输入分区：
+
+```text
+模型 Context 总预算
+  - 输出预留
+  = 输入预算
+      ├── prompt：系统指令、目标、约束、成功标准和 execution_context
+      ├── memory：GoalContract、检索元数据和选中 Memory
+      ├── tools：当前允许工具的完整 schema
+      └── observations：近期原文和旧历史的确定性摘要
+```
+
+默认总预算为 8192 tokens，输出预留 1024。可用 `CAREEROPS_MODEL_CONTEXT_TOKENS` 和 `CAREEROPS_RESERVED_OUTPUT_TOKENS` 配置。Runtime 先计算不可压缩的 prompt、空 Memory 外壳和工具 schema；如果这些受保护输入已经超过预算，Run 会在模型调用前失败。剩余空间中最多三分之一且不超过默认 768 tokens 分配给 Memory，其余交给 observations。最终请求必须满足 `estimated_input_tokens <= input_token_budget`。
+
+`AgentRunStep.model_request.context_token_budget` 保存本步预算、各分区估算、剩余空间和 compaction 节省量。Run 完成后，`timing_json.token_usage` 汇总估算 Context、供应商实际报告的 Agent 模型输入/输出、compaction 输入/输出/节省，以及独立的 Memory Evaluator/Embedding usage。控制台在选中 Run 时展示最近一步的预算。
+
+这仍是预检而非供应商 tokenizer 的绝对保证：近似计数器不完全了解不同 API 的消息包装。输出预留会作为 OpenAI `max_output_tokens` 或 DeepSeek `max_tokens` 传入；后续发现估算长期偏低时，应根据 provider usage 做安全余量校准。
 
 ## 最小质量基线
 

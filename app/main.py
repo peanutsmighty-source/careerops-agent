@@ -465,7 +465,7 @@ def preview_agent_task_memory_context(
     task_id: int,
     run_id: int | None = Query(default=None, ge=1),
     memory_limit: int = Query(default=8, ge=0, le=50),
-    memory_char_budget: int = Query(default=3000, ge=0, le=50000),
+    memory_token_budget: int = Query(default=768, ge=0, le=20000),
     session: Session = Depends(get_session),
 ):
     task = _get_agent_task_or_404(session, task_id)
@@ -478,7 +478,7 @@ def preview_agent_task_memory_context(
         task,
         run_id=run_id,
         memory_limit=memory_limit,
-        memory_char_budget=memory_char_budget,
+        memory_token_budget=memory_token_budget,
     ).as_dict()
 
 
@@ -489,8 +489,7 @@ def preview_agent_task_memory_context(
 def preview_agent_run_context_compaction(
     task_id: int,
     run_id: int,
-    char_threshold: int = Query(default=6000, ge=0, le=50000),
-    recent_observation_tokens: int = Query(default=384, ge=1, le=10000),
+    observation_token_budget: int = Query(default=384, ge=0, le=20000),
     session: Session = Depends(get_session),
 ):
     task = _get_agent_task_or_404(session, task_id)
@@ -508,8 +507,7 @@ def preview_agent_run_context_compaction(
         max_steps=run.max_steps,
         memory_context=memory_context,
         observations=observations,
-        char_threshold=char_threshold,
-        recent_observation_tokens=recent_observation_tokens,
+        observation_token_budget=observation_token_budget,
     ).as_dict()
 
 

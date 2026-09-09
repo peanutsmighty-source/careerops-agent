@@ -1,6 +1,6 @@
 # CareerOps Current Handoff
 
-Updated: 2026-09-08
+Updated: 2026-09-09
 
 This file contains only volatile development state. Stable architecture is in `README.md`; priorities are in `TODO.md`; explanations are in focused `docs/` notes.
 
@@ -14,23 +14,22 @@ This file contains only volatile development state. Stable architecture is in `R
 
 ## Current Task
 
-Complete observable T10 Context Compaction and close the T18 post-compaction metric.
+Complete T11 token-aware budgeting across the model Context and runtime usage audit.
 
 Implemented, verified, and committed locally; pending push authorization:
 
-- AgentLoop compacts long observation history before a model call while protecting GoalContract, constraints, execution progress, blockers, IDs, and next action.
-- LangChain `trim_messages` and approximate token counting select recent observations; old observations receive a deterministic summary, so no external model sees project context.
-- Raw and compacted Context, retained/removed items, and reasons are persisted in AgentRunStep and a dedicated Trace when compaction triggers.
-- Runtime Console and a read-only preview endpoint expose the same audit shape.
-- The deterministic Memory benchmark now reports critical-constraint retention both before and after compaction, completing T18 together with T10.
+- Memory selection now uses `memory_token_budget`; character limits no longer control Context assembly.
+- AgentLoop measures prompt, Memory, full tool schemas, and observations before every model call, reserves output tokens, and rejects protected input that cannot fit.
+- Remaining input capacity is divided between bounded Memory and observations; token-aware compaction progressively reduces old observation detail until the configured budget is met.
+- Each AgentRunStep persists the estimator, configured limits, per-section usage, remaining tokens, and compaction savings. Runtime Console shows the latest budget.
+- Run totals keep estimated Context, provider-reported Agent model usage, compaction savings, and Evaluator/Embedding usage separate.
+- OpenAI and DeepSeek adapters pass the reserved output budget to their provider request and record provider usage when returned.
 
-Expected changed files: Context Compaction service, AgentLoop/API/schema/UI wiring, focused tests, benchmark, README, TODO, Memory docs, learning notes, and this handoff.
+Expected changed files: token budget service/tests, Memory Runtime, Context Compaction, AgentLoop/provider adapters, API/schema/UI, benchmark/tests, README, TODO, Memory docs, learning notes, and this handoff.
 
 ## Verification
 
-- Focused tests: Context Compaction and Memory benchmark both pass.
-- Benchmark: 7 labeled Candidate cases; all metrics, including pre/post-compaction retention, report 1.0.
-- Full suite: 72 passed.
+- Full suite: 75 passed after final review.
 - Branch coverage: 87%.
 - `git diff --check`: passed.
 
@@ -42,11 +41,11 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 
 ## Review Before Completion
 
-- Do not confuse the current character trigger plus observation trimming with T11's full model token budget.
-- Full raw Context is intentionally persisted for audit and excluded from the model-facing request payload.
-- Deterministic summarization is intentional until an external summarizer has a separate data-egress authorization path.
-- Treat the current 1.0 scores as a deterministic regression baseline, not real-world quality evidence.
-- Add mislabeled or production-derived cases as failures are discovered; do not tune only to synthetic examples.
+- The local estimator is deterministic and provider-agnostic, not an exact provider tokenizer. Compare its estimate with provider usage and keep safety margin.
+- `model_context_tokens` is a configured admission-control budget, not automatically discovered from the selected model.
+- Protected prompt and tool schemas are never truncated; an impossible configured budget fails before calling the model.
+- Memory receives at most one third of capacity remaining after protected base input, capped by `memory_token_budget`; this is an explicit initial allocation policy to revisit with measurements.
+- T10's raw compaction audit remains local and excluded from the model-facing payload.
 
 ## Present but Not Default-Wired
 
@@ -60,7 +59,7 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. Push the local `Add observable context compaction` commit only with explicit authorization.
-2. Next major capability is T11 token-aware budgeting; do not begin it as part of this handoff.
+1. Push the two local commits only with explicit authorization.
+2. The recommended next capability is T03 free-text Candidate Builder, then T07/T09; do not start it in this handoff.
 
-After T10/T18: token-aware budgeting. Do not start RAG or multi-agent work yet.
+Do not start RAG or multi-agent work yet.

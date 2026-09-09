@@ -8,10 +8,11 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import AgentMemory, AgentRun, AgentTask, GoalContract
+from app.services.token_budget import estimate_tokens
 
 
 DEFAULT_MEMORY_LIMIT = 8
-DEFAULT_MEMORY_CHAR_BUDGET = 3000
+DEFAULT_MEMORY_TOKEN_BUDGET = 768
 TYPE_PRIORITY = {"working": 30, "fact": 20, "episodic": 10}
 TOKEN_PATTERN = re.compile(r"[a-z0-9_]+|[\u4e00-\u9fff]", re.IGNORECASE)
 
@@ -22,8 +23,8 @@ class MemoryContext:
     memories: list[dict]
     candidate_count: int
     excluded_expired_count: int
-    char_budget: int
-    chars_used: int
+    token_budget: int
+    tokens_used: int
 
     def as_dict(self) -> dict:
         return {
@@ -33,8 +34,9 @@ class MemoryContext:
                 "candidate_count": self.candidate_count,
                 "selected_count": len(self.memories),
                 "excluded_expired_count": self.excluded_expired_count,
-                "char_budget": self.char_budget,
-                "chars_used": self.chars_used,
+                "token_budget": self.token_budget,
+                "tokens_used": self.tokens_used,
+                "token_estimator": "langchain_count_tokens_approximately_v1",
             },
         }
 
@@ -45,10 +47,10 @@ def assemble_memory_context(
     *,
     run_id: int | None = None,
     memory_limit: int = DEFAULT_MEMORY_LIMIT,
-    memory_char_budget: int = DEFAULT_MEMORY_CHAR_BUDGET,
+    memory_token_budget: int = DEFAULT_MEMORY_TOKEN_BUDGET,
     now: datetime | None = None,
 ) -> MemoryContext:
-    if memory_limit < 0 or memory_char_budget < 0:
+    if memory_limit < 0 or memory_token_budget < 0:
         raise ValueError("memory limits cannot be negative")
 
     current_time = now or datetime.utcnow()
@@ -104,28 +106,27 @@ def assemble_memory_context(
     )
 
     selected: list[dict] = []
-    chars_used = 0
+    tokens_used = 0
     for memory in ranked:
         if len(selected) >= memory_limit:
             break
-        size = len(memory.memory_key) + len(memory.content)
-        if chars_used + size > memory_char_budget:
+        serialized = {
+            "id": memory.id,
+            "memory_type": memory.memory_type,
+            "scope_type": memory.scope_type,
+            "task_id": memory.task_id,
+            "run_id": memory.run_id,
+            "memory_key": memory.memory_key,
+            "content": memory.content,
+            "source": memory.source,
+            "importance": memory.importance,
+            "relevance_score": _memory_score(memory, query_tokens),
+        }
+        candidate_tokens = estimate_tokens([*selected, serialized])
+        if candidate_tokens > memory_token_budget:
             continue
-        selected.append(
-            {
-                "id": memory.id,
-                "memory_type": memory.memory_type,
-                "scope_type": memory.scope_type,
-                "task_id": memory.task_id,
-                "run_id": memory.run_id,
-                "memory_key": memory.memory_key,
-                "content": memory.content,
-                "source": memory.source,
-                "importance": memory.importance,
-                "relevance_score": _memory_score(memory, query_tokens),
-            }
-        )
-        chars_used += size
+        selected.append(serialized)
+        tokens_used = candidate_tokens
 
     return MemoryContext(
         goal_contract={
@@ -140,8 +141,8 @@ def assemble_memory_context(
         memories=selected,
         candidate_count=len(active_memories),
         excluded_expired_count=len(all_memories) - len(active_memories),
-        char_budget=memory_char_budget,
-        chars_used=chars_used,
+        token_budget=memory_token_budget,
+        tokens_used=tokens_used,
     )
 
 
