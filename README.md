@@ -139,6 +139,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `GET /agent/memories/{memory_id}/revisions`: inspect the complete version history of one Memory.
 - `POST /agent/alignments`: record a goal-alignment decision before a development action.
 - `POST /agent/tasks`, `GET /agent/tasks`, and `GET /agent/tasks/{task_id}`: create and retrieve user task contracts.
+- Task goals and subsequent `user_input` traces pass through a deterministic free-text Candidate Builder. Explicit bilingual preferences, facts, corrections, and learning episodes become structured, provenance-linked Candidate Journal records; they do not bypass Memory evaluation or trigger an extra model call.
 - `POST /agent/tasks/{task_id}/plan`: validate and persist ordered plan steps against the user task contract.
 - `POST /agent/tasks/{task_id}/traces` and `GET /agent/tasks/{task_id}/traces`: append and inspect Agent runtime trace events.
 - `POST /agent/tasks/{task_id}/run-learning-graph`: run the deterministic LangGraph skill-to-plan workflow.
@@ -156,6 +157,8 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `GET /agent/tasks/{task_id}/memory-context`: preview the GoalContract and selected non-expired memories; `memory_token_budget` limits the Memory portion.
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/context-compaction`: inspect token-aware observation compaction and its raw/retained/removed audit.
 - `GET /agent/memory-candidates`: inspect accepted, rejected, and review-required Candidate decisions with provenance and storage outcomes.
+
+Run `python -m app.memory_benchmark` to inspect the deterministic quality baseline. Alongside Memory Gate precision/recall and Context retention, it reports labeled free-text extraction precision, recall, and false-positive rate.
 
 The parser is intentionally deterministic for now. It extracts company, title, location, and a first set of AI/Agent engineering skills such as Python, FastAPI, LangGraph, RAG, Docker, Kubernetes, and evaluation-related requirements.
 

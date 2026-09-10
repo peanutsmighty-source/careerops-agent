@@ -15,7 +15,8 @@
 当前有两条写入路径：
 
 1. 用户或应用通过 `POST /agent/memories` 明确写入。调用者提供类型、作用域、key、内容、重要性和可选过期时间，Runtime 验证作用域后保存。
-2. AgentRun 完成后，Candidate Builder 从最终答案提出 episodic 候选，Memory Evaluator 审核后决定保存或拒绝。模型不能直接绕过审核写数据库。
+2. 任务创建或后续 `user_input` Trace 写入时，free-text Candidate Builder 从用户明确表达中提取 preference、fact、correction 和 learning episode，再交给 Memory Evaluator。
+3. AgentRun 完成后，Run Candidate Builder 从最终答案提出 episodic 候选，Memory Evaluator 审核后决定保存或拒绝。模型不能直接绕过审核写数据库。
 
 手动入口不是为了让用户维护所有记忆，而是控制面：用户可以明确保存关键事实、纠正 Agent，测试作用域，并审计自动写入策略。正常运行的目标仍然是由事件和 Evaluator 自动创建大部分 Memory。
 
@@ -69,6 +70,14 @@ Memory 有 `active` 和 `retired` 两个状态。Context 只召回 active Memory
 模型请求随后保存在 `AgentRunStep.model_request`。因此调试时可以查看模型当时实际获得了哪些记忆，而不是根据当前数据库内容猜测。
 
 ## 写入流程：Memory Evaluator
+
+### Free-text Candidate Builder
+
+例如用户输入“我的目标岗位是 Agent Engineer”，系统先创建真实的 `user_input` ExecutionTrace，然后由确定性双语规则生成结构化 proposal：类别为 `fact`、Memory 类型为 `fact`、稳定 key 为 `user-target-role`，并保存命中的原文、规则版本和 Trace ID。目标岗位使用稳定 key，后续纠正才有机会与同一事实建立冲突或版本关系；其他内容使用规范化文本哈希，避免暴露原文到 key。
+
+Builder 只负责召回可能值得记忆的内容，不负责判定是否应成为 Durable Memory。proposal 会转换成 `source=user_input` 的 MemoryCandidate，并经过既有 provenance、敏感信息、最小信息量、重复和语义审核。当前默认没有自动注入 Semantic Evaluator，所以有效的用户输入 Candidate 会进入 `needs_review + not_stored`，可在 Candidate Journal 审阅，不会静默写入长期记忆。
+
+当前规则只接受明确的第一人称表达，并让 correction 规则优先于嵌套的普通 fact 规则。这样牺牲隐式偏好召回，换取更低的误报和零额外模型调用。`python -m app.memory_benchmark` 使用中英文正例及第三方/命令式负例报告 extraction precision、recall 和 false-positive rate。未来可以把主 Agent 的结构化输出作为 piggyback proposal，或后台批处理模糊文本，但仍必须通过同一个 Gate。
 
 AgentRun 成功产生最终答案后，不再直接写入长期 Memory，而是先生成候选并审核：
 

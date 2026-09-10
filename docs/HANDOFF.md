@@ -1,6 +1,6 @@
 # CareerOps Current Handoff
 
-Updated: 2026-09-09
+Updated: 2026-09-10
 
 This file contains only volatile development state. Stable architecture is in `README.md`; priorities are in `TODO.md`; explanations are in focused `docs/` notes.
 
@@ -14,23 +14,23 @@ This file contains only volatile development state. Stable architecture is in `R
 
 ## Current Task
 
-Complete T11 token-aware budgeting across the model Context and runtime usage audit.
+Complete T03 free-text Candidate Builder without adding a model call per user turn.
 
-Implemented, verified, and committed locally; pending push authorization:
+Implemented, verified, and committed in the latest local commit; not pushed yet:
 
-- Memory selection now uses `memory_token_budget`; character limits no longer control Context assembly.
-- AgentLoop measures prompt, Memory, full tool schemas, and observations before every model call, reserves output tokens, and rejects protected input that cannot fit.
-- Remaining input capacity is divided between bounded Memory and observations; token-aware compaction progressively reduces old observation detail until the configured budget is met.
-- Each AgentRunStep persists the estimator, configured limits, per-section usage, remaining tokens, and compaction savings. Runtime Console shows the latest budget.
-- Run totals keep estimated Context, provider-reported Agent model usage, compaction savings, and Evaluator/Embedding usage separate.
-- OpenAI and DeepSeek adapters pass the reserved output budget to their provider request and record provider usage when returned.
+- Explicit English and Chinese preferences, target-role facts, corrections, and learning episodes become structured proposals.
+- Task creation and subsequent `user_input` Trace creation both invoke the Builder inline with no extra model or external-data call.
+- Every proposal binds to a real user-input Trace and passes through the existing Memory Gate; default user-input Candidates remain `needs_review + not_stored`.
+- Candidate Journal and Trace metadata expose evidence, extraction rule/version, confidence, category, and generated record IDs.
+- The deterministic benchmark now reports labeled extraction precision, recall, and false-positive rate in addition to Gate/retrieval/compaction metrics.
 
-Expected changed files: token budget service/tests, Memory Runtime, Context Compaction, AgentLoop/provider adapters, API/schema/UI, benchmark/tests, README, TODO, Memory docs, learning notes, and this handoff.
+Expected changed files: free-text Candidate Builder/tests, API wiring, benchmark/tests, README, TODO, Memory docs, learning notes, and this handoff.
 
 ## Verification
 
-- Full suite: 75 passed after final review.
-- Branch coverage: 87%.
+- Targeted suite: 4 passed after fixing sentence boundaries and rule precedence.
+- Full suite: 78 passed.
+- Branch coverage: 88%.
 - `git diff --check`: passed.
 
 Use:
@@ -41,11 +41,10 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 
 ## Review Before Completion
 
-- The local estimator is deterministic and provider-agnostic, not an exact provider tokenizer. Compare its estimate with provider usage and keep safety margin.
-- `model_context_tokens` is a configured admission-control budget, not automatically discovered from the selected model.
-- Protected prompt and tool schemas are never truncated; an impossible configured budget fails before calling the model.
-- Memory receives at most one third of capacity remaining after protected base input, capped by `memory_token_budget`; this is an explicit initial allocation policy to revisit with measurements.
-- T10's raw compaction audit remains local and excluded from the model-facing payload.
+- The v1 rules intentionally prefer precision over recall and only recognize explicit first-person phrasing.
+- Correction rules must run before nested fact patterns; ordinary English rules are anchored at sentence start.
+- Extraction quality is measured on a small deterministic baseline, not yet a representative production corpus.
+- Model-based or piggyback extraction remains a future option and must not bypass provenance validation or the Memory Gate.
 
 ## Present but Not Default-Wired
 
@@ -59,7 +58,7 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. Push the two local commits only with explicit authorization.
-2. The recommended next capability is T03 free-text Candidate Builder, then T07/T09; do not start it in this handoff.
+1. Push the three local commits only with explicit authorization.
+2. The recommended next capability after T03 is T07 working-Memory summarization/promotion, then T09; do not start it in this handoff.
 
 Do not start RAG or multi-agent work yet.

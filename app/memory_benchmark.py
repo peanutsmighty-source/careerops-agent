@@ -13,6 +13,7 @@ from app.services.memory_evaluator import MemoryCandidate, evaluate_and_store_ca
 from app.services.memory_runtime import assemble_memory_context
 from app.services.memory_versioning import record_initial_memory_version
 from app.services.context_compaction import compact_agent_context
+from app.services.free_text_candidate_builder import extract_free_text_candidate_proposals
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,10 @@ class MemoryBenchmarkReport:
     candidate_precision: float
     candidate_recall: float
     decision_accuracy: float
+    extraction_case_count: int
+    extraction_precision: float
+    extraction_recall: float
+    extraction_false_positive_rate: float
     retrieval_recall: float
     pre_compaction_critical_constraint_retention: float
     post_compaction_critical_constraint_retention: float
@@ -262,6 +267,7 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
     )
     predicted_positive = sum(actual_positive)
     positive_count = sum(expected_positive)
+    extraction = _free_text_extraction_metrics()
     return MemoryBenchmarkReport(
         candidate_case_count=len(results),
         candidate_precision=_ratio(true_positive, predicted_positive),
@@ -273,6 +279,10 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
             ),
             len(results),
         ),
+        extraction_case_count=extraction["case_count"],
+        extraction_precision=extraction["precision"],
+        extraction_recall=extraction["recall"],
+        extraction_false_positive_rate=extraction["false_positive_rate"],
         retrieval_recall=_ratio(len(relevant_keys & retrieved_keys), len(relevant_keys)),
         pre_compaction_critical_constraint_retention=float(critical_key in retrieved_keys),
         post_compaction_critical_constraint_retention=float(
@@ -280,6 +290,41 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
         ),
         candidate_cases=results,
     )
+
+
+def _free_text_extraction_metrics() -> dict[str, int | float]:
+    labeled_cases = (
+        ("I prefer explanations with concrete examples.", {"preference"}),
+        ("My target role is Agent Engineer.", {"fact"}),
+        ("Correction: my target role is Platform Engineer.", {"correction"}),
+        ("I learned that checkpoint versions prevent unsafe resumes.", {"episode"}),
+        ("我更喜欢先看具体例子。", {"preference"}),
+        ("我的目标岗位是 Agent Engineer。", {"fact"}),
+        ("更正：我的目标岗位是 Platform Engineer。", {"correction"}),
+        ("我发现分离状态和记忆可以减少错误恢复。", {"episode"}),
+        ("Please explain token budgeting.", set()),
+        ("We prefer PostgreSQL in production.", set()),
+        ("The target role is unclear.", set()),
+    )
+    true_positive = false_positive = false_negative = true_negative = 0
+    for text, expected_categories in labeled_cases:
+        actual_categories = {
+            proposal.category
+            for proposal in extract_free_text_candidate_proposals(text)
+        }
+        true_positive += len(expected_categories & actual_categories)
+        false_positive += len(actual_categories - expected_categories)
+        false_negative += len(expected_categories - actual_categories)
+        true_negative += int(not expected_categories and not actual_categories)
+    return {
+        "case_count": len(labeled_cases),
+        "precision": _ratio(true_positive, true_positive + false_positive),
+        "recall": _ratio(true_positive, true_positive + false_negative),
+        "false_positive_rate": _ratio(
+            false_positive,
+            false_positive + true_negative,
+        ),
+    }
 
 
 def _candidate(

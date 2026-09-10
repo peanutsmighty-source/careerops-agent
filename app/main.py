@@ -121,6 +121,10 @@ from app.services.context_compaction import compact_agent_context
 from app.services.memory_runtime import assemble_memory_context, resolve_memory_scope
 from app.services.memory_lifecycle import retire_memory, retire_task_working_memories
 from app.services.memory_versioning import record_initial_memory_version
+from app.services.free_text_candidate_builder import (
+    BUILDER_VERSION,
+    evaluate_free_text_candidates,
+)
 
 
 app = FastAPI(title="CareerOps Agent", version="0.1.0")
@@ -300,18 +304,19 @@ def create_agent_task(payload: AgentTaskCreate, session: Session = Depends(get_s
     task = AgentTask(goal_contract_id=contract.id, **payload.model_dump())
     session.add(task)
     session.flush()
-    session.add(
-        ExecutionTrace(
-            task_id=task.id,
-            event_type="user_input",
-            input_summary=task.user_goal,
-            output_summary="Created a user task contract.",
-            metadata_json={
-                "constraints": task.constraints,
-                "success_criteria": task.success_criteria,
-            },
-        )
+    trace = ExecutionTrace(
+        task_id=task.id,
+        event_type="user_input",
+        input_summary=task.user_goal,
+        output_summary="Created a user task contract.",
+        metadata_json={
+            "constraints": task.constraints,
+            "success_criteria": task.success_criteria,
+        },
     )
+    session.add(trace)
+    session.flush()
+    _build_candidates_from_user_input(session, task, trace)
     get_or_create_task_policy(session, task)
     session.refresh(task)
     return task
@@ -406,13 +411,16 @@ def get_agent_plan(task_id: int, session: Session = Depends(get_session)) -> lis
 def create_execution_trace(
     task_id: int, payload: ExecutionTraceCreate, session: Session = Depends(get_session)
 ) -> ExecutionTrace:
-    _get_agent_task_or_404(session, task_id)
+    task = _get_agent_task_or_404(session, task_id)
     if payload.plan_step_id:
         step = session.get(PlanStep, payload.plan_step_id)
         if not step or step.task_id != task_id:
             raise HTTPException(status_code=400, detail="plan step does not belong to this task")
     trace = ExecutionTrace(task_id=task_id, **payload.model_dump())
     session.add(trace)
+    session.flush()
+    if trace.event_type == "user_input":
+        _build_candidates_from_user_input(session, task, trace)
     session.commit()
     session.refresh(trace)
     return trace
@@ -975,3 +983,27 @@ def _get_agent_task_or_404(session: Session, task_id: int) -> AgentTask:
     if not task:
         raise HTTPException(status_code=404, detail="agent task not found")
     return task
+
+
+def _build_candidates_from_user_input(
+    session: Session,
+    task: AgentTask,
+    trace: ExecutionTrace,
+) -> None:
+    evaluations = evaluate_free_text_candidates(
+        session,
+        task,
+        trace,
+        text=trace.input_summary,
+    )
+    metadata = dict(trace.metadata_json or {})
+    metadata["candidate_builder"] = {
+        "version": BUILDER_VERSION,
+        "candidate_count": len(evaluations),
+        "candidate_record_ids": [
+            evaluation.candidate_record.id
+            for evaluation in evaluations
+            if evaluation.candidate_record is not None
+        ],
+    }
+    trace.metadata_json = metadata

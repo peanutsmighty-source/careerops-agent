@@ -228,3 +228,30 @@ Memory 是持久化候选信息，Context 是某次模型调用临时选择出�
 - 当前仍使用通用近似 tokenizer，不能保证与每个供应商完全一致；生产环境应增加模型专用计数器和安全余量。
 
 面试题：为什么只记录模型 API 返回的 `prompt_tokens` 还不够？回答要点：供应商 usage 只在调用后可见，无法阻止请求事前超窗；Runtime 需要调用前估算做 admission control，再用调用后真实 usage 做计费、监控和估算误差校准。
+
+## 22. Free-text Candidate Builder：自动发现不等于自动记住
+
+例如用户创建任务时写“我更喜欢先看具体例子”，这句话可能对后续教学有用，但系统不应因为匹配到“喜欢”就立刻把它升级为长期事实。T03 的处理链路是：先持久化真实 `user_input` Trace，Builder 再提取结构化 preference proposal，最后由 Memory Gate 核验来源并写入 Candidate Journal；默认决策是 `needs_review + not_stored`。
+
+如果没有 Builder，只有 Run 最终答案会产生 Candidate，用户在自然语言中明确给出的偏好、事实和纠正会被漏掉，只存在 transcript/Trace 中，后续 Context assembly 无法检索。如果让 Builder 直接写 Memory，误匹配、转述第三方观点或一句临时要求又可能污染所有后续 Run。核心控制边界因此是：Builder 优化召回，Evaluator/Gate 控制精度和持久化。
+
+当前数据流如下：
+
+```text
+task.user_goal / user_input trace
+  -> 高精度双语规则与句子切分
+  -> FreeTextCandidateProposal（category/type/key/evidence/rule/confidence）
+  -> MemoryCandidate（绑定真实 trace_id 和 task_id）
+  -> Memory Gate
+  -> Candidate Journal: needs_review / not_stored
+```
+
+规则只识别明确第一人称表达：偏好、目标岗位、带 `Correction/更正` 前缀的纠正，以及“我学到/发现”的可复用经历。目标岗位映射到稳定 key `user-target-role`，其他候选使用内容哈希 key。Trace metadata 保存 Builder 版本、候选数量和 Journal record IDs，使一次输入、抽取结果和审核决定能双向追踪。任务创建和后续 `user_input` Trace 都已接线；Runtime Console 原有 Candidate Journal 会展示结果，无需新增第二套存储或 UI。
+
+生产系统常让主模型在正常回答时附带结构化 memory proposals，以 piggyback 避免额外调用；也会将多轮消息放入后台批处理，用较强模型处理隐式语义。CareerOps 当前刻意采用确定性规则：延迟低、无数据出站、可复现，且不增加 token 成本；代价是只覆盖少量显式句式，隐含偏好和复杂纠正会漏召回。后续即使加入模型抽取器，模型输出仍是不可信 proposal，不能控制 scope、provenance、稳定 ID 或最终写入。
+
+实现中最重要的失败来自规则边界：最初的句子切分没有包含英文句号，导致四个英文陈述被当成一句；同时 `Correction: my target role...` 内部命中了普通 target-role 模式，被错误分类为 fact。修复方式是补齐句子边界、把 correction 放在更高优先级，并将普通英文规则锚定句首。这说明抽取 eval 不能只有正例，还要包含规则重叠和第三方陈述等 hard negatives。
+
+质量不能只看“示例能抽出来”。Benchmark 分别统计 extraction precision、recall 和 false-positive rate：precision 约束抽出的内容有多少是对的，recall 约束标注内容漏了多少，false-positive rate 专门观察负例被错误抽取的比例。当前小型中英标签集是 CI 防回归基线，不代表真实对话质量；生产上线前仍需从真实误报、漏报中持续扩充数据，并按语言、类别和风险分桶。
+
+面试题：为什么 Candidate Builder 不应直接写 Durable Memory？回答要点：抽取器解决的是“可能值得记住什么”的召回问题，持久化解决的是可信度、作用域、冲突、敏感信息和生命周期问题；把两者合并会让模型或规则误报直接污染长期 Context。正确设计是 proposal -> provenance validation -> evaluation -> journal -> promotion，并用 precision/recall/false-positive rate 分别度量不同失败。

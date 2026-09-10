@@ -8,6 +8,10 @@ def test_memory_benchmark_meets_current_quality_floor():
     assert report.candidate_precision >= 1.0
     assert report.candidate_recall >= 1.0
     assert report.decision_accuracy >= 1.0
+    assert report.extraction_case_count == 11
+    assert report.extraction_precision >= 1.0
+    assert report.extraction_recall >= 1.0
+    assert report.extraction_false_positive_rate == 0.0
     assert report.retrieval_recall >= 1.0
     assert report.pre_compaction_critical_constraint_retention >= 1.0
     assert report.post_compaction_critical_constraint_retention >= 1.0
