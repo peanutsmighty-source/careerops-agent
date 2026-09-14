@@ -42,12 +42,24 @@
 
 Memory 有 `active` 和 `retired` 两个状态。Context 只召回 active Memory。
 
-- AgentRun 完成、失败或达到 step limit 时，该 Run 的 working memory 自动退休。
+- 成功的 `get_skill_demand` 工具结果会先形成 run-scoped working memory，供同一 Run 的后续模型步骤使用。
+- AgentRun 成功完成时，白名单 promotion policy 把这条 provenance 已验证的摘要提升为 task-scoped fact，然后退休原 working memory。
+- AgentRun 失败或达到 step limit 时，该 Run 的 working memory 只退休，不晋升。
 - AgentTask 完成或取消时，该 Task 下仍 active 的 working memory 自动退休。
 - 用户可以通过 `POST /agent/memories/{memory_id}/retire` 明确撤回一条 Memory。
 - `expires_at` 只是适合时间敏感信息的辅助边界。到期记录不会进入 Context，但事实是否仍成立不能只靠时间判断。
 
-退休采用软删除：内容、来源、退休时间和原因继续保留，便于审计，不再影响模型。working memory 晋升和后台物理清理尚未实现。
+退休采用软删除：内容、来源、退休时间和原因继续保留，便于审计，不再影响模型。当前晋升仅支持 `verified_skill_demand_fact_v1` 白名单策略；通用 working-memory 总结和后台物理清理尚未实现。
+
+## Working Memory 总结与晋升
+
+例如 `get_skill_demand` 返回结构化技能统计后，Runtime 不直接把整个 tool output 当长期事实。它先生成一条内容受控的 working Candidate，只保留前五项技能、job count 和 requirement count，并绑定真实 Run、Step、ToolCall 和工具名。通过 Gate 后，这条 Memory 使用 run scope，因此下一模型步骤可以引用，但其他 Run/Task 不可见。
+
+只有 Run 返回 final answer 并进入 `completed`，同一确定性摘要才生成 task-scoped fact Candidate；provenance 中记录 `promotion_policy` 和 `promoted_from_working_memory_id`，再次经过 Gate 后写入。随后原 working memory 被软退休。若 Run 失败或达到最大 step，结束路径不会生成 promotion Candidate，只记录退休原因。
+
+当前没有让模型自由决定 `promotion_eligible=true`，因为模型可以把假设标成“已验证”。晋升资格由 Runtime 的工具白名单、成功 observation、真实 provenance 和成功终态共同决定。这个 v1 故意只覆盖 `get_skill_demand`，证明生命周期闭环而不把任意工具输出长期化。
+
+Task completion 目前有两条来源：控制面显式把 Task PATCH 为 `completed`，或者 deterministic learning graph 返回 completed。两者都会在提交 Task 状态的同一事务中退休 task-scoped working memory。当前 API 尚未逐条验证 `success_criteria` 的证据，因此 `completed` 仍是受信控制面声明，而不是通用自动验收结论。
 
 事实变化使用版本覆盖，而不是让同一稳定 key 的旧值与新值同时保持 active。例如 `task:12:skill-demand` 从“LangGraph 出现在 3 个 JD”变为“出现在 5 个 JD”时，`AgentMemory` 原地更新为 version 2，version 1 和 version 2 都写入 `AgentMemoryRevision`。旧 revision 的 `valid_to` 被关闭，只有 `AgentMemory` 的当前内容进入 Context。
 

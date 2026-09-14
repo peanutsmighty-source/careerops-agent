@@ -18,7 +18,10 @@ from app.services.context_compaction import (
     build_execution_context,
     compact_agent_context,
 )
-from app.services.memory_evaluator import evaluate_and_store_run_memories
+from app.services.memory_evaluator import (
+    evaluate_and_store_run_memories,
+    evaluate_and_store_tool_working_memory,
+)
 from app.services.memory_lifecycle import retire_run_working_memories
 from app.services.memory_runtime import (
     DEFAULT_MEMORY_TOKEN_BUDGET,
@@ -627,6 +630,13 @@ class AgentLoopEngine:
                     "error": str(exc),
                 }
             step.observation = observation
+            working_evaluation = evaluate_and_store_tool_working_memory(
+                session,
+                task,
+                run,
+                step,
+                observation=observation,
+            )
             timing = dict(step.timing_json or {})
             timing["tool_call_ms"] = _elapsed_ms(tool_started)
             timing["step_total_ms"] = round(
@@ -645,6 +655,42 @@ class AgentLoopEngine:
                         "agent_run_step_id": step.id,
                         "sequence": step.sequence,
                     }
+            if working_evaluation is not None:
+                working = working_evaluation.memory
+                session.add(
+                    ExecutionTrace(
+                        task_id=run.task_id,
+                        event_type="memory",
+                        status=working_evaluation.decision,
+                        input_summary=(
+                            f"Capture working memory from Agent run {run.id}, "
+                            f"step {step.sequence}."
+                        ),
+                        output_summary=(
+                            "Stored verified tool output as run-scoped working memory."
+                            if working_evaluation.storage_action == "stored"
+                            else "Working-memory candidate was not stored."
+                        ),
+                        metadata_json={
+                            "agent_run_id": run.id,
+                            "sequence": step.sequence,
+                            "lifecycle_phase": "working_capture",
+                            "decision": working_evaluation.decision,
+                            "storage_action": working_evaluation.storage_action,
+                            "candidate_record_id": (
+                                working_evaluation.candidate_record.id
+                                if working_evaluation.candidate_record
+                                else None
+                            ),
+                            "memory_id": working.id if working else None,
+                            "promotion_policy": (
+                                working_evaluation.candidate.provenance.get(
+                                    "promotion_policy"
+                                )
+                            ),
+                        },
+                    )
+                )
             session.commit()
 
     def _step_limit_reached(self, run_id: int) -> bool:
@@ -678,6 +724,14 @@ class AgentLoopEngine:
                 run_id=run.id,
                 reason="agent_run_completed",
             )
+            promoted_working_memory_ids = [
+                evaluation.candidate.provenance["promoted_from_working_memory_id"]
+                for evaluation in memory_evaluations
+                if evaluation.decision == "accept"
+                and evaluation.candidate.provenance.get(
+                    "promoted_from_working_memory_id"
+                )
+            ]
             memory_finalize_ms = _elapsed_ms(finalize_started)
             _finalize_run_timing(
                 run,
@@ -742,6 +796,7 @@ class AgentLoopEngine:
                             for evaluation in memory_evaluations
                         ],
                         "retired_working_memory_ids": retired_memory_ids,
+                        "promoted_working_memory_ids": promoted_working_memory_ids,
                         "timing": run.timing_json,
                     },
                 )

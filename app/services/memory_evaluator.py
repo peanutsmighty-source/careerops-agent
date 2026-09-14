@@ -88,8 +88,39 @@ def evaluate_and_store_run_memories(
         raise ValueError("agent task no longer exists")
     return tuple(
         evaluate_and_store_candidate(session, task, candidate)
-        for candidate in build_run_memory_candidates(task, run, answer=answer)
+        for candidate in build_run_memory_candidates(
+            session, task, run, answer=answer
+        )
     )
+
+
+def evaluate_and_store_tool_working_memory(
+    session: Session,
+    task: AgentTask,
+    run: AgentRun,
+    step: AgentRunStep,
+    *,
+    observation: dict,
+) -> MemoryEvaluation | None:
+    """Capture an allowlisted, successful tool result for later steps in this run."""
+    candidate = build_tool_working_memory_candidate(
+        task,
+        run,
+        step,
+        observation=observation,
+    )
+    if candidate is None:
+        return None
+    existing = session.scalar(
+        select(AgentMemory).where(
+            AgentMemory.goal_contract_id == task.goal_contract_id,
+            AgentMemory.memory_type == "working",
+            AgentMemory.memory_key == candidate.memory_key,
+        )
+    )
+    if existing is not None:
+        return None
+    return evaluate_and_store_candidate(session, task, candidate)
 
 
 def evaluate_and_store_candidate(
@@ -174,10 +205,10 @@ def evaluate_and_store_candidate(
 
 
 def build_run_memory_candidates(
-    task: AgentTask, run: AgentRun, *, answer: str
+    session: Session, task: AgentTask, run: AgentRun, *, answer: str
 ) -> tuple[MemoryCandidate, ...]:
     candidates = [build_run_outcome_candidate(task, run, answer=answer)]
-    skill_demand = build_skill_demand_candidate(task, run)
+    skill_demand = build_skill_demand_candidate(session, task, run)
     if skill_demand:
         candidates.append(skill_demand)
     return tuple(candidates)
@@ -206,10 +237,48 @@ def build_run_outcome_candidate(
     )
 
 
-def build_skill_demand_candidate(
-    task: AgentTask, run: AgentRun
+def build_tool_working_memory_candidate(
+    task: AgentTask,
+    run: AgentRun,
+    step: AgentRunStep,
+    *,
+    observation: dict,
 ) -> MemoryCandidate | None:
-    """Extract a fact candidate from the structured get_skill_demand observation."""
+    """Build only deterministic working knowledge with a known promotion policy."""
+    if step.tool_call_id is None or observation.get("status") != "succeeded":
+        return None
+    response = step.model_response or {}
+    if response.get("tool_name") != "get_skill_demand":
+        return None
+    summarized = _skill_demand_summary(observation)
+    if summarized is None:
+        return None
+    content, evidence = summarized
+    return MemoryCandidate(
+        memory_type="working",
+        scope_type="run",
+        task_id=None,
+        run_id=run.id,
+        memory_key=f"agent-run:{run.id}:working:skill-demand",
+        content=content,
+        source="tool:get_skill_demand",
+        importance=4,
+        relevance_text=evidence,
+        provenance={
+            "agent_run_id": run.id,
+            "task_id": task.id,
+            "agent_run_step_id": step.id,
+            "tool_call_id": step.tool_call_id,
+            "tool_name": "get_skill_demand",
+            "promotion_policy": "verified_skill_demand_fact_v1",
+        },
+    )
+
+
+def build_skill_demand_candidate(
+    session: Session, task: AgentTask, run: AgentRun
+) -> MemoryCandidate | None:
+    """Promote an allowlisted working result to a task-scoped fact candidate."""
     for step in reversed(run.steps):
         response = step.model_response or {}
         observation = step.observation or {}
@@ -217,26 +286,27 @@ def build_skill_demand_candidate(
             continue
         if observation.get("status") != "succeeded":
             continue
-        output = observation.get("output") or {}
-        skills = output.get("skills") or []
-        if not skills:
+        summarized = _skill_demand_summary(observation)
+        if summarized is None:
             continue
-        entries = [
-            (
-                f"{skill.get('name', 'unknown')} "
-                f"({skill.get('job_count', 0)} jobs, "
-                f"{skill.get('requirement_count', 0)} requirements)"
+        content, evidence = summarized
+        working = session.scalar(
+            select(AgentMemory).where(
+                AgentMemory.goal_contract_id == task.goal_contract_id,
+                AgentMemory.memory_type == "working",
+                AgentMemory.run_id == run.id,
+                AgentMemory.memory_key
+                == f"agent-run:{run.id}:working:skill-demand",
+                AgentMemory.status == "active",
             )
-            for skill in skills[:5]
-        ]
-        evidence = "; ".join(entries)
+        )
         return MemoryCandidate(
             memory_type="fact",
             scope_type="task",
             task_id=task.id,
             run_id=None,
             memory_key=f"task:{task.id}:skill-demand",
-            content=f"Observed JD skill demand: {evidence}.",
+            content=content,
             source="tool:get_skill_demand",
             importance=4,
             relevance_text=evidence,
@@ -246,9 +316,28 @@ def build_skill_demand_candidate(
                 "agent_run_step_id": step.id,
                 "tool_call_id": step.tool_call_id,
                 "tool_name": "get_skill_demand",
+                "promotion_policy": "verified_skill_demand_fact_v1",
+                "promoted_from_working_memory_id": working.id if working else None,
             },
         )
     return None
+
+
+def _skill_demand_summary(observation: dict) -> tuple[str, str] | None:
+    output = observation.get("output") or {}
+    skills = output.get("skills") or []
+    if not skills:
+        return None
+    entries = [
+        (
+            f"{skill.get('name', 'unknown')} "
+            f"({skill.get('job_count', 0)} jobs, "
+            f"{skill.get('requirement_count', 0)} requirements)"
+        )
+        for skill in skills[:5]
+    ]
+    evidence = "; ".join(entries)
+    return f"Observed JD skill demand: {evidence}.", evidence
 
 
 def evaluate_memory_candidate(

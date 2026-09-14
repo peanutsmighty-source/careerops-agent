@@ -1,6 +1,6 @@
 # CareerOps Current Handoff
 
-Updated: 2026-09-10
+Updated: 2026-09-14
 
 This file contains only volatile development state. Stable architecture is in `README.md`; priorities are in `TODO.md`; explanations are in focused `docs/` notes.
 
@@ -14,22 +14,22 @@ This file contains only volatile development state. Stable architecture is in `R
 
 ## Current Task
 
-Complete T03 free-text Candidate Builder without adding a model call per user turn.
+Complete T07 working-Memory summarization and controlled promotion.
 
 Implemented, verified, and committed in the latest local commit; not pushed yet:
 
-- Explicit English and Chinese preferences, target-role facts, corrections, and learning episodes become structured proposals.
-- Task creation and subsequent `user_input` Trace creation both invoke the Builder inline with no extra model or external-data call.
-- Every proposal binds to a real user-input Trace and passes through the existing Memory Gate; default user-input Candidates remain `needs_review + not_stored`.
-- Candidate Journal and Trace metadata expose evidence, extraction rule/version, confidence, category, and generated record IDs.
-- The deterministic benchmark now reports labeled extraction precision, recall, and false-positive rate in addition to Gate/retrieval/compaction metrics.
+- Successful `get_skill_demand` observations are deterministically summarized into run-scoped working Memory for subsequent model steps.
+- The Builder requires non-empty structured evidence and verified Run/Step/ToolCall provenance; other tools are not automatically captured.
+- A completed Run promotes the summary through a new task-scoped fact Candidate and records the source working Memory ID.
+- Failed and step-limited Runs retire working Memory without promotion; temporary data cannot enter later tasks.
+- Candidate Journal and AgentRun Trace expose working capture, promotion policy, promoted IDs, and retired IDs.
 
-Expected changed files: free-text Candidate Builder/tests, API wiring, benchmark/tests, README, TODO, Memory docs, learning notes, and this handoff.
+Expected changed files: AgentLoop, Memory Evaluator, lifecycle tests, README, TODO, Memory docs, learning notes, and this handoff.
 
 ## Verification
 
-- Targeted suite: 4 passed after fixing sentence boundaries and rule precedence.
-- Full suite: 78 passed.
+- Targeted lifecycle suite: 3 passed.
+- Full suite: 80 passed.
 - Branch coverage: 88%.
 - `git diff --check`: passed.
 
@@ -41,10 +41,10 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 
 ## Review Before Completion
 
-- The v1 rules intentionally prefer precision over recall and only recognize explicit first-person phrasing.
-- Correction rules must run before nested fact patterns; ordinary English rules are anchored at sentence start.
-- Extraction quality is measured on a small deterministic baseline, not yet a representative production corpus.
-- Model-based or piggyback extraction remains a future option and must not bypass provenance validation or the Memory Gate.
+- Promotion is controlled by the Runtime allowlist, not by a model-proposed eligibility flag.
+- `verified_skill_demand_fact_v1` is intentionally the only promotion policy in this minimal implementation.
+- Run completion permits promotion; failed/max-step outcomes only retire working Memory.
+- Explicit Task completion still trusts the control plane and does not yet evaluate evidence for every success criterion.
 
 ## Present but Not Default-Wired
 
@@ -58,7 +58,7 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. Push the three local commits only with explicit authorization.
-2. The recommended next capability after T03 is T07 working-Memory summarization/promotion, then T09; do not start it in this handoff.
+1. Push the four local commits only with explicit authorization.
+2. The recommended next capability is T09 consolidation/forgetting; do not start it in this handoff.
 
 Do not start RAG or multi-agent work yet.

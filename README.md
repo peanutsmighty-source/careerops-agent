@@ -155,6 +155,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/checkpoints`: inspect the outer workflow's Node-level State history.
 - `POST /agent/tasks/{task_id}/recover-agent-runs`: classify and recover stale AgentRuns without blindly repeating ambiguous tools.
 - `GET /agent/tasks/{task_id}/memory-context`: preview the GoalContract and selected non-expired memories; `memory_token_budget` limits the Memory portion.
+- Successful `get_skill_demand` observations are deterministically summarized into run-scoped working Memory for later model steps. A successfully completed Run promotes that verified summary to a task-scoped fact; failed or step-limited Runs retire it without promotion.
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/context-compaction`: inspect token-aware observation compaction and its raw/retained/removed audit.
 - `GET /agent/memory-candidates`: inspect accepted, rejected, and review-required Candidate decisions with provenance and storage outcomes.
 

@@ -255,3 +255,21 @@ task.user_goal / user_input trace
 质量不能只看“示例能抽出来”。Benchmark 分别统计 extraction precision、recall 和 false-positive rate：precision 约束抽出的内容有多少是对的，recall 约束标注内容漏了多少，false-positive rate 专门观察负例被错误抽取的比例。当前小型中英标签集是 CI 防回归基线，不代表真实对话质量；生产上线前仍需从真实误报、漏报中持续扩充数据，并按语言、类别和风险分桶。
 
 面试题：为什么 Candidate Builder 不应直接写 Durable Memory？回答要点：抽取器解决的是“可能值得记住什么”的召回问题，持久化解决的是可信度、作用域、冲突、敏感信息和生命周期问题；把两者合并会让模型或规则误报直接污染长期 Context。正确设计是 proposal -> provenance validation -> evaluation -> journal -> promotion，并用 precision/recall/false-positive rate 分别度量不同失败。
+
+## 23. Working Memory 的总结、晋升与终止边界
+
+例如 `get_skill_demand` 在 Run 第 2 步返回“LangGraph 出现在 5 个 JD”。第 3 步模型需要这条结论，但此时 Run 尚未成功，不能提前把它宣布为长期事实。T07 先把确定性摘要保存为 run-scoped working memory；只有模型返回 final answer、Run 状态落为 `completed` 后，Runtime 才产生 task-scoped fact Candidate 并再次经过 Memory Gate。原 working memory无论是否晋升都会退休。
+
+没有这个边界会出现两种相反失败：完全不持久化时，Context compaction 或进程恢复可能丢失重要中间结论；无条件长期化时，失败 Run、超步 Run 和临时假设会污染后续任务。这里把“数据库可恢复”和“业务上长期有效”分开：working memory 可以持久化，但只在窄 scope 内有效；promotion 是一次新的可信度和生命周期决策。
+
+当前数据流是：successful tool observation -> deterministic summary -> working Candidate -> Gate -> run-scoped active Memory -> 后续 Step Context。成功终态再走 working Memory -> fact Candidate -> Gate -> task-scoped fact，同时将 working Memory 标记 retired。失败或 `max_steps` 只执行最后一步退休。Candidate Journal 和 AgentRun Trace 都记录 promotion policy、源 working Memory ID、晋升结果与退休 ID。
+
+控制边界不交给模型。v1 只允许 `verified_skill_demand_fact_v1`：工具必须是白名单中的 `get_skill_demand`，observation 必须 succeeded，Run/Step/ToolCall provenance 必须真实，摘要字段由确定性代码构造，Run 还必须最终 completed。模型不能通过输出一个 `promotion_eligible` 布尔值绕过这些条件。
+
+这与 Claude Code/Codex 的文件化知识有共同思想：持久信息必须可审计，真正进入某次 Context 的只是装配视图。但 CareerOps 是多用户业务 Harness，需要数据库外键、scope、版本、Candidate 决策和事务；直接照搬单用户 coding agent 的 Markdown memory 会缺少并发更新、权限隔离和结构化查询。未来可以额外提供 Markdown 导出/人工编辑视图，但不应替代规范化存储。
+
+当前最重要的限制是 promotion policy 只有一个确定性工具；它证明了闭环，不是通用语义晋升器。Task `completed` 也仍可由控制面直接声明，Runtime 尚未逐条验证 success criteria 的证据。生产系统通常引入 completion evaluator、人工审批或领域状态机，再允许 task-scoped working memory 晋升。
+
+实现测试首次失败是因为空测试库让 `get_skill_demand` 返回空数组。Builder 正确地拒绝制造一条“空结果” working memory；测试随后改用真实解析的最小 JD 建立证据。这提醒我们：生命周期测试不能靠伪造字段绕过业务来源，否则只验证了状态变化，没有验证 provenance 链。
+
+面试题：为什么 successful tool call 仍不足以自动晋升所有 working memory？回答要点：工具成功只证明调用完成，不证明结果长期有价值、语义正确或适合更大 scope。晋升还需要确定性摘要、可信 provenance、允许的 promotion policy、成功终态和新的 Gate 决策；失败 Run 只退休，不晋升。

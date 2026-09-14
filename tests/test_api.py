@@ -537,10 +537,17 @@ def test_agent_loop_reads_memory_and_writes_one_idempotent_episode(client):
     assert [memory["memory_key"] for memory in episodes].count(outcome_key) == 1
     traces = client.get(f"/agent/tasks/{task['id']}/traces").json()
     memory_traces = [trace for trace in traces if trace["event_type"] == "memory"]
-    assert len(memory_traces) == 2
+    assert len(memory_traces) == 3
+    working_trace = next(
+        trace
+        for trace in memory_traces
+        if trace["metadata_json"].get("lifecycle_phase") == "working_capture"
+    )
+    assert working_trace["status"] == "accept"
+    assert working_trace["metadata_json"]["storage_action"] == "stored"
     episode_trace = next(
         trace for trace in memory_traces
-        if trace["metadata_json"]["memory_type"] == "episodic"
+        if trace["metadata_json"].get("memory_type") == "episodic"
     )
     assert episode_trace["status"] == "accept"
     assert episode_trace["metadata_json"]["storage_action"] == "stored"
@@ -559,7 +566,7 @@ def test_agent_loop_reads_memory_and_writes_one_idempotent_episode(client):
     assert "Agent Harness" in fact["content"]
     fact_trace = next(
         trace for trace in memory_traces
-        if trace["metadata_json"]["memory_type"] == "fact"
+        if trace["metadata_json"].get("memory_type") == "fact"
     )
     assert fact_trace["status"] == "accept"
     assert fact_trace["metadata_json"]["candidate_content"] == fact["content"]
@@ -1333,6 +1340,120 @@ def test_run_completion_retires_run_scoped_working_memory(client):
     assert "temporary-run-note" not in [
         memory["memory_key"] for memory in context["memories"]
     ]
+
+
+def test_verified_tool_working_memory_is_promoted_only_after_successful_run(client):
+    seeded = client.post(
+        "/job-archives",
+        json={
+            "source_url": "https://example.com/jobs/memory-agent",
+            "raw_content": (
+                "Company: Memory Lab\nTitle: Agent Engineer\nLocation: Shanghai\n"
+                "Build Python and LangGraph agent runtimes."
+            ),
+        },
+    )
+    assert seeded.status_code == 201
+    task = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Promote verified working evidence",
+            "user_goal": "Inspect skill demand and preserve verified reusable evidence.",
+            "success_criteria": ["Only successful tool evidence becomes durable."],
+        },
+    ).json()
+
+    run = client.post(
+        f"/agent/tasks/{task['id']}/agent-runs",
+        json={"provider": "demo", "max_steps": 4},
+    ).json()
+
+    assert run["status"] == "completed"
+    final_request_memories = run["steps"][-1]["model_request"]["memory_context"][
+        "memories"
+    ]
+    assert any(
+        memory["memory_key"].endswith("working:skill-demand")
+        for memory in final_request_memories
+    )
+    retired_working = client.get(
+        "/agent/memories?memory_type=working&include_retired=true"
+    ).json()
+    assert len(retired_working) == 1
+    working = retired_working[0]
+    assert working["scope_type"] == "run"
+    assert working["status"] == "retired"
+    assert working["retirement_reason"] == "agent_run_completed"
+
+    facts = client.get("/agent/memories?memory_type=fact").json()
+    promoted = next(memory for memory in facts if memory["memory_key"].endswith("skill-demand"))
+    candidates = client.get(
+        f"/agent/memory-candidates?task_id={task['id']}"
+    ).json()
+    promoted_record = next(
+        candidate
+        for candidate in candidates
+        if candidate["memory_id"] == promoted["id"]
+    )
+    assert (
+        promoted_record["provenance"]["promoted_from_working_memory_id"]
+        == working["id"]
+    )
+    run_trace = next(
+        trace
+        for trace in client.get(f"/agent/tasks/{task['id']}/traces").json()
+        if trace["event_type"] == "agent_run" and trace["status"] == "completed"
+    )
+    assert run_trace["metadata_json"]["promoted_working_memory_ids"] == [
+        working["id"]
+    ]
+    later_task = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Unrelated later task",
+            "user_goal": "Verify temporary evidence does not leak across tasks.",
+            "success_criteria": ["No prior task-scoped memory is visible."],
+        },
+    ).json()
+    later_context = client.get(
+        f"/agent/tasks/{later_task['id']}/memory-context"
+    ).json()
+    assert later_context["memories"] == []
+
+
+def test_step_limit_retires_working_memory_without_promotion(client):
+    seeded = client.post(
+        "/job-archives",
+        json={
+            "source_url": "https://example.com/jobs/incomplete-memory-agent",
+            "raw_content": (
+                "Company: Memory Lab\nTitle: Agent Engineer\nLocation: Shanghai\n"
+                "Build Python and LangGraph agent runtimes."
+            ),
+        },
+    )
+    assert seeded.status_code == 201
+    task = client.post(
+        "/agent/tasks",
+        json={
+            "title": "Do not promote incomplete work",
+            "user_goal": "Inspect skill demand but stop before a verified final result.",
+            "success_criteria": ["Incomplete runs do not promote working memory."],
+        },
+    ).json()
+
+    run = client.post(
+        f"/agent/tasks/{task['id']}/agent-runs",
+        json={"provider": "demo", "max_steps": 2},
+    ).json()
+
+    assert run["status"] == "max_steps"
+    retired_working = client.get(
+        "/agent/memories?memory_type=working&include_retired=true"
+    ).json()
+    assert len(retired_working) == 1
+    assert retired_working[0]["retirement_reason"] == "agent_run_max_steps"
+    assert client.get("/agent/memories?memory_type=fact").json() == []
 
 
 def test_task_completion_and_manual_action_retire_working_memory(client):
