@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.database import SessionLocal
 from app.models import AgentRun, AgentRunStep, AgentTask, ExecutionTrace
+from app.services.memory_maintenance import maintain_task_memories
 from app.services.authorization import get_or_create_task_policy
 from app.services.context_compaction import (
     build_execution_context,
@@ -732,6 +733,7 @@ class AgentLoopEngine:
                     "promoted_from_working_memory_id"
                 )
             ]
+            maintain_task_memories(session, run.task, dry_run=False)
             memory_finalize_ms = _elapsed_ms(finalize_started)
             _finalize_run_timing(
                 run,

@@ -204,6 +204,20 @@ AgentLoop 在调用模型前使用同一近似计数器拆分并记录四个输�
 
 这仍是预检而非供应商 tokenizer 的绝对保证：近似计数器不完全了解不同 API 的消息包装。输出预留会作为 OpenAI `max_output_tokens` 或 DeepSeek `max_tokens` 传入；后续发现估算长期偏低时，应根据 provider usage 做安全余量校准。
 
+## T09：整理、遗忘与正文清理
+
+成功 Run 在同一完成事务内调用 `maintain_task_memories`。整理只操作当前 Task 的 task/run scope：过期记录退休；Runtime 自动生成的 task-scoped episodic 按 importance、ID 倒序保留，完全相同正文只留代表项，其余活跃经历最多保留 8 条。事实、用户手工经历和其他 Task 的记录不参与容量淘汰。语义相近不等于同一事实，v1 不做模型摘要或语义合并。
+
+维护接口 `POST /agent/tasks/{task_id}/memory-maintenance` 默认返回预览，不写维护结果。`{"dry_run": false}` 应用退休；`{"dry_run": false, "purge": true, "retention_days": 30}` 还会清理已退休至少 30 天的 working/episodic 正文。新退休记录先经历完整保留期。自动 Run 完成路径不执行不可逆清理，也没有后台清理调度器。
+
+清理保留 AgentMemory 的 ID、唯一键、scope、退休原因，正文改为清理标记，物理删除其 revision 行；关联 Candidate 的正文和 evaluator_output 被清除，原 decision、来源及关系保留。`MemoryCleanupRecord` 保存当前正文 SHA-256、移除的 revision 数量和时间；`memory_maintenance` Trace 记录退休原因、代表项和清理 ID。Journal 的决策仍不可改写，但正文保留期是 append-only 审计的显式例外。哈希只能验证另存的原文，不能恢复已删除内容。
+
+保留唯一键可阻止同一事件在重放后重新生成 active Memory；重放产生的 Candidate 也不重新保存已清理的正文。启动迁移不会给 tombstone 补回 revision。写入、退休、清理记录与 Trace 共享调用方事务，失败可整体回滚。
+
+这是 Memory 正文保留策略，不是隐私擦除或全库配额：Candidate provenance、Trace、AgentRunStep、checkpoint、备份中仍可能有原始副本，元数据行仍随事件增长。SQLite 删除行后通常复用页，不保证数据库文件立刻缩小。物理清理需周期性显式调用；全库归档、字节配额和备份保留尚未实现。
+
+晋升与属性变更是不同命令：working -> fact 需要新 Candidate 和 Gate；fact 内容变化走版本化 supersede；退休走 lifecycle；T09 清理走 retention。当前没有通用 Memory PATCH，也不允许模型原地修改 scope/type 来扩大可见性。
+
 ## 最小质量基线
 
 `python -m app.memory_benchmark` 在隔离的内存数据库中运行真实 Evaluator 和 Context assembler，不调用外部模型。当前标注覆盖可信 Runtime 候选、敏感值、信息不足、伪造 provenance、未知来源、需要语义复核的用户输入，以及相关、无关和过期 Memory。

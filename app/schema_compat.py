@@ -129,6 +129,11 @@ def ensure_memory_revision_history(engine: Engine) -> None:
         if {"status", "retired_at"} <= memory_columns
         else "NULL"
     )
+    cleanup_filter = (
+        " AND NOT EXISTS (SELECT 1 FROM memory_cleanup_records AS cleanup "
+        "WHERE cleanup.memory_id = memory.id)"
+        if inspector.has_table("memory_cleanup_records") else ""
+    )
     with engine.begin() as connection:
         connection.exec_driver_sql(
             "INSERT INTO agent_memory_revisions "
@@ -138,7 +143,7 @@ def ensure_memory_revision_history(engine: Engine) -> None:
             "memory.importance, NULL, 'legacy_backfill', "
             f"{valid_from}, {valid_to} FROM agent_memories AS memory "
             "WHERE NOT EXISTS (SELECT 1 FROM agent_memory_revisions AS revision "
-            "WHERE revision.memory_id = memory.id)"
+            "WHERE revision.memory_id = memory.id)" + cleanup_filter
         )
 
 

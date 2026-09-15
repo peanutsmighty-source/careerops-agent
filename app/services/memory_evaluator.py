@@ -13,6 +13,7 @@ from app.models import (
     AgentTask,
     ExecutionTrace,
     MemoryCandidateRecord,
+    MemoryCleanupRecord,
     ToolCallRecord,
 )
 from app.services.semantic_memory_evaluator import (
@@ -201,6 +202,12 @@ def evaluate_and_store_candidate(
         evaluation = rule_evaluation
 
     record = _record_evaluation(session, task, evaluation)
+    if existing is not None and session.scalar(select(MemoryCleanupRecord.id).where(
+        MemoryCleanupRecord.memory_id == existing.id
+    )) is not None:
+        # Replays must not restore payloads after retention cleanup.
+        record.content = "[retired payload purged]"
+        record.evaluator_output = None
     return replace(evaluation, candidate_record=record)
 
 

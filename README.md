@@ -158,6 +158,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - Successful `get_skill_demand` observations are deterministically summarized into run-scoped working Memory for later model steps. A successfully completed Run promotes that verified summary to a task-scoped fact; failed or step-limited Runs retire it without promotion.
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/context-compaction`: inspect token-aware observation compaction and its raw/retained/removed audit.
 - `GET /agent/memory-candidates`: inspect accepted, rejected, and review-required Candidate decisions with provenance and storage outcomes.
+- `POST /agent/tasks/{task_id}/memory-maintenance`: preview task-local expiry, exact episode consolidation, and retention cleanup. Defaults to `dry_run: true`; apply with `dry_run: false`, and explicitly enable retired working/episodic payload cleanup with `purge: true` (default retention: 30 days). Successful Runs automatically retain at most eight active Runtime episodes without purging payloads.
 
 Run `python -m app.memory_benchmark` to inspect the deterministic quality baseline. Alongside Memory Gate precision/recall and Context retention, it reports labeled free-text extraction precision, recall, and false-positive rate.
 

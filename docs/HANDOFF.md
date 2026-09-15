@@ -1,6 +1,6 @@
 # CareerOps Current Handoff
 
-Updated: 2026-09-14
+Updated: 2026-09-15
 
 This file contains only volatile development state. Stable architecture is in `README.md`; priorities are in `TODO.md`; explanations are in focused `docs/` notes.
 
@@ -14,23 +14,24 @@ This file contains only volatile development state. Stable architecture is in `R
 
 ## Current Task
 
-Complete T07 working-Memory summarization and controlled promotion.
+Complete T09 deterministic consolidation, forgetting, and retired payload cleanup.
 
-Implemented, verified, and committed in the latest local commit; not pushed yet:
+Implemented and verified:
 
-- Successful `get_skill_demand` observations are deterministically summarized into run-scoped working Memory for subsequent model steps.
-- The Builder requires non-empty structured evidence and verified Run/Step/ToolCall provenance; other tools are not automatically captured.
-- A completed Run promotes the summary through a new task-scoped fact Candidate and records the source working Memory ID.
-- Failed and step-limited Runs retire working Memory without promotion; temporary data cannot enter later tasks.
-- Candidate Journal and AgentRun Trace expose working capture, promotion policy, promoted IDs, and retired IDs.
+- Successful Runs consolidate exact Runtime episode duplicates and cap active task episodes at eight in their completion transaction.
+- Task-local expired memories retire; facts and user episodes are excluded from capacity eviction.
+- Maintenance API defaults to dry-run. Explicit purge removes old working/episodic revisions and payloads after retention, preserving identity and cleanup audit.
+- Candidate decisions remain inspectable; payload retention is an explicit exception to append-only content history.
+- Startup backfill and Candidate replay respect cleanup tombstones.
+- Business databases were not purged. No external model calls were used.
 
-Expected changed files: AgentLoop, Memory Evaluator, lifecycle tests, README, TODO, Memory docs, learning notes, and this handoff.
+See `app/services/memory_maintenance.py` and `tests/test_memory_maintenance.py`.
 
 ## Verification
 
-- Targeted lifecycle suite: 3 passed.
-- Full suite: 80 passed.
-- Branch coverage: 88%.
+- Targeted maintenance suite: 4 passed.
+- Full suite: 84 passed (80.24 seconds under coverage).
+- Coverage with branch measurement: 89%; maintenance module: 97%.
 - `git diff --check`: passed.
 
 Use:
@@ -41,10 +42,10 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 
 ## Review Before Completion
 
-- Promotion is controlled by the Runtime allowlist, not by a model-proposed eligibility flag.
-- `verified_skill_demand_fact_v1` is intentionally the only promotion policy in this minimal implementation.
-- Run completion permits promotion; failed/max-step outcomes only retire working Memory.
-- Explicit Task completion still trusts the control plane and does not yet evaluate evidence for every success criterion.
+- Cleanup retains tombstone IDs/keys so replay cannot recreate active Memory.
+- Cleanup removes Memory revision rows and selected payload columns, not all original copies in Trace/checkpoints/provenance/backups.
+- Metadata still grows. Global byte quotas, archive tiers, physical SQLite file compaction and a cleanup scheduler are unfinished.
+- T07 promotion still permits only verified skill-demand facts on successful completion; failure/max-step paths only retire working Memory.
 
 ## Present but Not Default-Wired
 
@@ -58,7 +59,7 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. Push the four local commits only with explicit authorization.
-2. The recommended next capability is T09 consolidation/forgetting; do not start it in this handoff.
+1. Commit T09 and push pending commits using the user's existing push authorization; confirm actual remote status before reporting delivery.
+2. T09 is complete at the documented minimal scope. T12 is next in the backlog, but the user's RAG restriction remains in force; do not start it automatically.
 
 Do not start RAG or multi-agent work yet.

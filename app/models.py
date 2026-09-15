@@ -330,6 +330,18 @@ class AgentMemoryRevision(Base):
     memory: Mapped[AgentMemory] = relationship(back_populates="revisions")
 
 
+class MemoryCleanupRecord(Base):
+    __tablename__ = "memory_cleanup_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    memory_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_memories.id"), unique=True, index=True
+    )
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    removed_revision_count: Mapped[int] = mapped_column(Integer)
+    cleaned_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class MemoryCandidateRecord(Base):
     __tablename__ = "memory_candidates"
 

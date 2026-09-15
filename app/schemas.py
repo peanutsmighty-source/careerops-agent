@@ -143,6 +143,13 @@ class AgentMemoryRevisionRead(BaseModel):
     valid_to: datetime | None
 
 
+class MemoryMaintenanceCreate(BaseModel):
+    dry_run: bool = True
+    purge: bool = False
+    episode_limit: int = Field(default=8, ge=1, le=100)
+    retention_days: int = Field(default=30, ge=1)
+
+
 class AgentMemoryRetire(BaseModel):
     reason: str = Field(min_length=1, max_length=240)
 

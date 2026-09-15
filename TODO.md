@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 11 complete and 7 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **18 capabilities**: 12 complete and 6 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -64,9 +64,10 @@ Tracked count: **18 capabilities**: 11 complete and 7 open. Sources: 8 `user-dir
   - Retire temporary state at Run/Task boundaries and promote only verified reusable outcomes.
   - Acceptance: temporary hypotheses do not leak into later tasks.
 
-- [ ] **T09 Add consolidation, forgetting, and physical cleanup** (`roadmap`)
+- [x] **T09 Add consolidation, forgetting, and physical cleanup** (`roadmap`)
   - Keep audit history while bounding active and retained storage.
   - Acceptance: repeated runs cannot grow active Context without limit.
+  - Minimal implementation: exact Runtime episode consolidation, eight active episodes per task, expiry retirement, explicit retention-based payload purge with tombstones and audit. Trace/checkpoint retention and global byte quotas remain outside this implementation.
 
 - [x] **T18 Build Memory precision/recall benchmarks** (`user-derived`)
   - Label what should be stored, rejected, reviewed, retrieved, and preserved through compaction.

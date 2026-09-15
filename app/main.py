@@ -67,6 +67,7 @@ from app.schemas import (
     LearningTaskRead,
     MemoryContextRead,
     MemoryCandidateRead,
+    MemoryMaintenanceCreate,
     PlanCreate,
     PlanStepRead,
     ParsedJobRead,
@@ -121,6 +122,7 @@ from app.services.context_compaction import compact_agent_context
 from app.services.memory_runtime import assemble_memory_context, resolve_memory_scope
 from app.services.memory_lifecycle import retire_memory, retire_task_working_memories
 from app.services.memory_versioning import record_initial_memory_version
+from app.services.memory_maintenance import maintain_task_memories
 from app.services.free_text_candidate_builder import (
     BUILDER_VERSION,
     evaluate_free_text_candidates,
@@ -272,6 +274,20 @@ def retire_agent_memory(
     session.commit()
     session.refresh(memory)
     return memory
+
+
+@app.post("/agent/tasks/{task_id}/memory-maintenance")
+def maintain_agent_memories(
+    task_id: int, payload: MemoryMaintenanceCreate,
+    session: Session = Depends(get_session),
+) -> dict:
+    task = session.get(AgentTask, task_id)
+    contract = _get_or_create_active_goal_contract(session)
+    if not task or task.goal_contract_id != contract.id:
+        raise HTTPException(status_code=404, detail="task not found")
+    report = maintain_task_memories(session, task, **payload.model_dump())
+    session.commit()
+    return report
 
 
 @app.post("/agent/alignments", response_model=AgentAlignmentRead, status_code=status.HTTP_201_CREATED)

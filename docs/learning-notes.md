@@ -256,6 +256,18 @@ task.user_goal / user_input trace
 
 面试题：为什么 Candidate Builder 不应直接写 Durable Memory？回答要点：抽取器解决的是“可能值得记住什么”的召回问题，持久化解决的是可信度、作用域、冲突、敏感信息和生命周期问题；把两者合并会让模型或规则误报直接污染长期 Context。正确设计是 proposal -> provenance validation -> evaluation -> journal -> promotion，并用 precision/recall/false-positive rate 分别度量不同失败。
 
+## 24. Memory 容量、退休与物理清理
+
+假设同一个 CareerOps Task 连续完成 11 个 Run，每次结论不同。以前每个结果都可能成为 active episodic；Context 虽有 8 条/768 token 预算，数据库活跃候选却仍增长。T09 在成功 Run 的完成事务里整理：相同正文只留代表项，其他自动经历按重要性、较新 ID 排序，最多保留 8 条，超出者退休。这里 consolidation 是确定性去重，不是让模型把若干经历写成一条新事实。
+
+退休解决“以后是否检索”，物理清理解决“还保存多少正文”。接口默认 dry-run 可查看影响，显式 purge 才清理超过保留期的 retired working/episodic。它删除 revision、清除 Memory 和关联 Candidate 正文副本，同时留下 ID、唯一键、决策、来源关系、SHA-256 和维护 Trace。事实不参与该清理，以免不经事实治理就失去有效知识。没有无限保存原文的承诺；需要原文级追溯，应在清理前做有保留期的归档。
+
+最容易漏掉的是重放与迁移：若删除唯一键，同一 Run 重放可能重新创建数据；若启动代码发现没有 revision 就补历史，清理会被迁移抵消。因此保留 tombstone，并让迁移及 Candidate 重放理解清理状态。测试覆盖 11 次真实本地模型循环、事务回滚、Task 隔离、保留期、Journal 清理和启动后不补历史。
+
+生产实现还会把冷热存储、分区保留、调度器、全库字节配额和隐私删除串起来。当前只有 Task 局部的 active episode 上限和显式正文清理：Trace/checkpoint 仍可能保留原文，元数据继续增长，数据库文件也不会因为删行立即缩小。它完成最小生命周期闭环，但不能称为全库空间有界或隐私擦除。
+
+面试题：为什么已经有 Context token budget，还需要 Memory retention？回答要点：前者限制每次推理的输入成本；后者控制检索池质量和历史正文保留。退休先排除检索，保留期支持追溯，清理释放正文，同时 tombstone 保住幂等性；还要明确全库其他副本的生命周期。
+
 ## 23. Working Memory 的总结、晋升与终止边界
 
 例如 `get_skill_demand` 在 Run 第 2 步返回“LangGraph 出现在 5 个 JD”。第 3 步模型需要这条结论，但此时 Run 尚未成功，不能提前把它宣布为长期事实。T07 先把确定性摘要保存为 run-scoped working memory；只有模型返回 final answer、Run 状态落为 `completed` 后，Runtime 才产生 task-scoped fact Candidate 并再次经过 Memory Gate。原 working memory无论是否晋升都会退休。
