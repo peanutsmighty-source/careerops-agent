@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -20,6 +21,8 @@ from app.services.agent_workflow import (
     resume_agent_workflow_if_interrupted,
 )
 from app.services.checkpoint_versioning import CheckpointVersionError
+from app.services.agent_run_lease import claimed_agent_run_lease
+from app.database import SessionLocal
 
 
 TERMINAL_TOOL_STATUSES = {"succeeded", "failed", "denied"}
@@ -61,13 +64,31 @@ def recover_stale_agent_runs(
     stale_runs = [
         run for run in candidates if _last_activity_at(run) <= stale_before
     ]
-    decisions = [_recover_run(session, task, run) for run in stale_runs]
+    decisions = []
+    for candidate in stale_runs:
+        owner = f"recovery-api:{uuid4()}"
+        with claimed_agent_run_lease(
+            SessionLocal, run_id=candidate.id, owner=owner
+        ) as lease:
+            if not lease.acquired:
+                decisions.append(AgentRunRecoveryDecision(
+                    run_id=candidate.id,
+                    previous_status=candidate.status,
+                    status=candidate.status,
+                    action="lease_conflict",
+                    reason="Another worker owns the AgentRun lease.",
+                ))
+                continue
+            session.expire_all()
+            run = session.get(AgentRun, candidate.id)
+            decisions.append(recover_agent_run(session, task, run))
     return AgentRunRecoveryReport(
         task_id=task.id,
         stale_before=stale_before,
         scanned_count=len(stale_runs),
         recovered_count=sum(
-            decision.action != "needs_review" for decision in decisions
+            decision.action not in {"needs_review", "lease_conflict"}
+            for decision in decisions
         ),
         decisions=decisions,
     )
@@ -79,7 +100,7 @@ def _last_activity_at(run: AgentRun) -> datetime:
     return run.started_at
 
 
-def _recover_run(
+def recover_agent_run(
     session: Session, task: AgentTask, run: AgentRun
 ) -> AgentRunRecoveryDecision:
     previous_status = run.status

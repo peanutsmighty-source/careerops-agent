@@ -222,6 +222,10 @@ AgentLoop 在调用模型前使用同一近似计数器拆分并记录四个输�
 
 CareerOps 不采用“所有判断都交给 LLM”的路线。Candidate Builder 先提出候选；Memory Gate 用确定性规则验证 scope、真实 provenance、最小信息量、敏感值、稳定键和精确重复。规则能明确证明无效时直接 reject，可信 Runtime/白名单工具来源可 accept。用户自由文本和未知来源因为需要理解语义，先进入 `needs_review`。
 
+当前所谓“值得保存”并不是一个统一的智能分数。确定性 Gate 使用代理条件：正文至少 24 个字符、不是秘密值、不是精确/规范化重复、scope 合法、provenance 可验证。可信 Runtime 或 Tool Candidate 满足这些条件就被视为 `informative + novel + provenance_verified`；它没有进一步证明内容未来一定有用。用户输入则不会因满足长度就自动长期化，而是进入语义判断。
+
+可选 Semantic Evaluator 才显式判断 `long_term_value`（low/medium/high）、semantic duplicate 和 conflict。low 或模型 reject 会拒绝；合法 duplicate 会拒绝；conflict、模型不确定、Evaluator 故障或非法 Memory 引用会保留 `needs_review`；只有 accept、类型一致、引用均来自提供的候选集且无冲突时才接受。默认 Run 未注入它，人工 review 的决议写回接口也仍未实现。因此当前系统准确的说法是“高精度硬规则加一个可选语义判定器”，不是完整的价值学习系统。
+
 可选 Semantic Evaluator 只处理原因恰好为 `semantic_evaluation_required` 的歧义候选。它判断长期价值、语义重复和冲突，但输出仍受结构化 schema、已知 Memory ID 集合、类型一致性和确定性规则约束。默认 AgentRun 尚未注入该 Evaluator，因此默认自由文本歧义会留在 Journal 等待 review；这不是“LLM 判断后自动人工复核”的串行流水线，而是按原因选择自动语义判断或人工处理。
 
 晋升资格也不是开放式模型判断。当前唯一自动策略 `verified_skill_demand_fact_v1` 要求成功的 `get_skill_demand` ToolCall、非空结构化结果、Run 成功终态，以及一条 active working Memory；其 revision 必须记录完全匹配的 policy、Run、Task、Step、ToolCall 和工具名。之后新 fact Candidate 仍经过 Gate，继续检查 scope、重复和稳定键，并可能产生 fact supersede。其他 working Memory 没有匹配策略时不会自动晋升。

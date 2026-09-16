@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TypedDict
+from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ from app.services.checkpoint_versioning import (
     require_checkpoint_version,
     require_explicit_source_version,
 )
+from app.services.agent_run_lease import claimed_agent_run_lease
 
 
 AGENT_WORKFLOW_VERSION = "agent-workflow-v1"
@@ -136,6 +138,36 @@ def start_agent_workflow(
 ) -> AgentRun:
     model = model_override or create_agent_model(provider, model_name)
     run = create_agent_run(session, task=task, model=model, max_steps=max_steps)
+    owner = f"inline:{uuid4()}"
+    with claimed_agent_run_lease(
+        SessionLocal, run_id=run.id, owner=owner
+    ) as lease:
+        if not lease.acquired:
+            raise ValueError("new AgentRun could not acquire its execution lease")
+        execute_agent_workflow_run(run.id, lease_owner=owner, model_override=model)
+    return get_agent_run(session, run.id)
+
+
+def execute_agent_workflow_run(
+    run_id: int, *, lease_owner: str, model_override: AgentModel | None = None
+) -> AgentRun:
+    with SessionLocal() as session:
+        run = get_agent_run(session, run_id)
+        if run.status != "running":
+            return run
+        if run.lease_owner != lease_owner:
+            raise ValueError("AgentRun execution lease is not owned by this worker")
+        task = session.get(AgentTask, run.task_id)
+        if not task:
+            raise ValueError("AgentRun task no longer exists")
+        model = model_override or create_agent_model(run.provider, run.model)
+        _invoke_agent_workflow(run, task, model)
+        return get_agent_run(session, run.id)
+
+
+def _invoke_agent_workflow(
+    run: AgentRun, task: AgentTask, model: AgentModel
+) -> None:
     graph = build_agent_workflow(model)
     graph.invoke(
         {
@@ -144,7 +176,7 @@ def start_agent_workflow(
             "run_id": run.id,
             "provider": model.provider,
             "model": model.model,
-            "max_steps": max_steps,
+            "max_steps": run.max_steps,
             "context_ready": False,
             "agent_status": "running",
             "final_answer": None,
@@ -155,7 +187,6 @@ def start_agent_workflow(
         },
         config={"configurable": {"thread_id": agent_workflow_thread_id(run)}},
     )
-    return get_agent_run(session, run.id)
 
 
 def resume_agent_workflow_if_interrupted(run: AgentRun, model: AgentModel) -> bool:

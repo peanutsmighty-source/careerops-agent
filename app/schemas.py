@@ -401,6 +401,7 @@ class AgentRunCreate(BaseModel):
     provider: Literal["demo", "openai", "deepseek"] = "demo"
     model: str | None = Field(default=None, min_length=1, max_length=120)
     max_steps: int = Field(default=4, ge=1, le=8)
+    execution_mode: Literal["inline", "worker"] = "inline"
 
 
 class MemoryContextRead(BaseModel):
@@ -454,6 +455,9 @@ class AgentRunRead(BaseModel):
     stop_reason: str | None
     error: str | None
     timing_json: dict | None
+    lease_owner: str | None
+    lease_expires_at: datetime | None
+    lease_heartbeat_at: datetime | None
     steps: list[AgentRunStepRead]
     created_at: datetime
     started_at: datetime
@@ -470,6 +474,7 @@ class AgentRunRecoveryDecisionRead(BaseModel):
         "restored_observation",
         "executed_pending_tool",
         "needs_review",
+        "lease_conflict",
     ]
     reason: str
 

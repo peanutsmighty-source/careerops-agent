@@ -151,11 +151,12 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `PUT /agent/tasks/{task_id}/tool-policy`: update the task's tool allowlist from the control plane.
 - `POST /agent/tasks/{task_id}/tool-calls`: validate, authorize, execute, and trace one tool invocation.
 - `GET /agent/tasks/{task_id}/tool-calls`: inspect durable ToolCall state and idempotency metadata.
-- `POST /agent/tasks/{task_id}/agent-runs`: run the outer LangGraph workflow whose `run_agent` node invokes the framework-independent AgentLoopEngine.
+- `POST /agent/tasks/{task_id}/agent-runs`: run the outer LangGraph workflow whose `run_agent` node invokes the framework-independent AgentLoopEngine. `execution_mode: "inline"` remains the default; `"worker"` returns the persisted Run while an in-process worker executes it.
 - `GET /agent/tasks/{task_id}/agent-runs`: inspect model steps, observations, and stop reasons.
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/checkpoints`: inspect the outer workflow's Node-level State history.
 - `POST /agent/tasks/{task_id}/agent-runs/{run_id}/migrate-checkpoint`: explicitly migrate a supported unversioned outer-workflow checkpoint. Incompatible recovery is stopped before model or tool execution.
 - `POST /agent/tasks/{task_id}/recover-agent-runs`: classify and recover stale AgentRuns without blindly repeating ambiguous tools.
+- Every execution and recovery path acquires an atomic database lease on the AgentRun. The owner heartbeats while working; duplicate deliveries skip an active lease, and another instance may take over only after expiry. Application startup schedules stale `running` Runs for recovery.
 - `GET /agent/tasks/{task_id}/memory-context`: preview the GoalContract and selected non-expired memories; `memory_token_budget` limits the Memory portion.
 - Successful `get_skill_demand` observations are deterministically summarized into run-scoped working Memory for later model steps. A successfully completed Run promotes that verified summary to a task-scoped fact; failed or step-limited Runs retire it without promotion.
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/context-compaction`: inspect token-aware observation compaction and its raw/retained/removed audit.

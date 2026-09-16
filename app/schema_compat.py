@@ -210,3 +210,35 @@ def ensure_agent_timing_columns(engine: Engine) -> None:
             connection.execute(
                 text(f"ALTER TABLE {table_name} ADD COLUMN timing_json JSON")
             )
+
+
+def ensure_agent_run_lease_columns(engine: Engine) -> None:
+    """Add lease ownership fields to existing development AgentRun tables."""
+    inspector = inspect(engine)
+    if not inspector.has_table("agent_runs"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("agent_runs")}
+    missing = {
+        "lease_owner", "lease_expires_at", "lease_heartbeat_at"
+    } - columns
+    if missing and engine.dialect.name != "sqlite":
+        raise RuntimeError("agent_runs requires a database migration for worker leases")
+    if engine.dialect.name != "sqlite":
+        return
+    statements = {
+        "lease_owner": "ALTER TABLE agent_runs ADD COLUMN lease_owner VARCHAR(160)",
+        "lease_expires_at": "ALTER TABLE agent_runs ADD COLUMN lease_expires_at DATETIME",
+        "lease_heartbeat_at": "ALTER TABLE agent_runs ADD COLUMN lease_heartbeat_at DATETIME",
+    }
+    with engine.begin() as connection:
+        for column in ("lease_owner", "lease_expires_at", "lease_heartbeat_at"):
+            if column in missing:
+                connection.execute(text(statements[column]))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_agent_runs_lease_owner "
+            "ON agent_runs (lease_owner)"
+        ))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_agent_runs_lease_expires_at "
+            "ON agent_runs (lease_expires_at)"
+        ))

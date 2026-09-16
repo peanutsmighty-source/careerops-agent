@@ -53,9 +53,18 @@ POST /agent/tasks/{task_id}/recover-agent-runs?stale_after_seconds=60
 
 只扫描超过阈值且仍为 `running` 的 Run。返回每个 Run 的恢复动作、当前状态和原因。
 
+## Worker 与 lease
+
+`execution_mode: worker` 先持久化 AgentRun，再把 Run ID 投递给进程内线程池。队列消息本身不携带完整 State；worker 重新读取数据库，并用单条条件 `UPDATE` 抢占 `agent_runs` 上的 `lease_owner`、`lease_expires_at` 和 `lease_heartbeat_at`。只有 status 仍为 `running`，且 lease 为空、已过期或属于同一 owner 时才能成功。
+
+worker 在租约周期的三分之一间隔续租。正常完成、失败或进程内异常都会释放；进程崩溃无法执行 finally，其他实例只能等 `lease_expires_at` 后接管。重复投递使用不同 owner，因此同一时刻只有一个任务能进入 Agent workflow。同步 API、直接 AgentLoop helper、手动恢复和启动恢复也使用同一租约协议。
+
+服务启动时扫描超过 `CAREEROPS_STARTUP_RECOVERY_SECONDS`（默认 60 秒）的 `running` Run，并异步投递恢复。恢复分类仍依据持久化 Step、ToolCall 和 checkpoint；lease 只决定谁有权执行，不会把不安全的 external-write 未知结果变成可重试。
+
 ## 当前限制
 
-- 恢复由 API 或控制台手动触发，尚未在服务启动时自动扫描。
-- 没有 worker lease；多个服务实例同时恢复同一 Run 时仍需要数据库锁或租约。
+- worker 是进程内线程池，不是 Redis/Kafka 等持久队列；崩溃后的 Run 依靠数据库扫描，而不是消息确认机制。
+- heartbeat 失败不能强制中断一个已经阻塞在第三方 SDK 内的 Python 调用。生产实现需要调用超时、协作取消和 fencing token，防止失去租约的旧 worker 提交迟到结果。
+- SQLite 可验证条件更新语义，但高并发生产部署仍应使用 PostgreSQL，并结合锁等待、隔离级别和监控压测。
 - 外部工具还没有 reconciliation adapter，因此未知结果只能进入人工处理。
-- Graph 尚未版本化；代码升级后恢复旧 checkpoint 需要版本兼容策略。
+- 启动扫描当前只在进程启动时执行；没有常驻调度器周期性重扫。

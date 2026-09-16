@@ -28,6 +28,7 @@ from app.services.memory_runtime import (
     DEFAULT_MEMORY_TOKEN_BUDGET,
     assemble_memory_context,
 )
+from app.services.agent_run_lease import claimed_agent_run_lease
 from app.services.model_credentials import load_deepseek_api_key
 from app.services.token_budget import measure_context_budget
 from app.services.tool_runtime import run_tool_call, serialize_tool_call
@@ -1020,7 +1021,13 @@ def start_agent_run(
     """Run the engine directly, without a workflow framework."""
     model = model_override or create_agent_model(provider, model_name)
     run = create_agent_run(session, task=task, model=model, max_steps=max_steps)
-    AgentLoopEngine(model).run(run.id)
+    owner = f"direct:{uuid4()}"
+    with claimed_agent_run_lease(
+        SessionLocal, run_id=run.id, owner=owner
+    ) as lease:
+        if not lease.acquired:
+            raise ValueError("new AgentRun could not acquire its execution lease")
+        AgentLoopEngine(model).run(run.id)
     return get_agent_run(session, run.id)
 
 

@@ -2,6 +2,7 @@ from sqlalchemy import create_engine, inspect
 
 from app.schema_compat import (
     ensure_agent_timing_columns,
+    ensure_agent_run_lease_columns,
     ensure_memory_candidate_columns,
     ensure_memory_revision_history,
     ensure_memory_scope_columns,
@@ -150,3 +151,23 @@ def test_agent_timing_upgrade_preserves_existing_runtime_rows(tmp_path):
         assert connection.exec_driver_sql(
             "SELECT id, task_id, timing_json FROM agent_runs WHERE id = 3"
         ).one() == (3, 7, None)
+
+
+def test_agent_run_lease_upgrade_preserves_existing_rows(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-leases.db'}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE agent_runs (id INTEGER PRIMARY KEY, task_id INTEGER, status VARCHAR(30))"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO agent_runs (id, task_id, status) VALUES (3, 7, 'running')"
+        )
+    ensure_agent_run_lease_columns(engine)
+    ensure_agent_run_lease_columns(engine)
+    columns = {column["name"] for column in inspect(engine).get_columns("agent_runs")}
+    assert {"lease_owner", "lease_expires_at", "lease_heartbeat_at"} <= columns
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT id, task_id, status, lease_owner, lease_expires_at, lease_heartbeat_at "
+            "FROM agent_runs WHERE id = 3"
+        ).one() == (3, 7, "running", None, None, None)

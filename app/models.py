@@ -563,6 +563,13 @@ class AgentRun(Base):
     stop_reason: Mapped[str | None] = mapped_column(String(60), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     timing_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    lease_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

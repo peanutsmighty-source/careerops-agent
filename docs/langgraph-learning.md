@@ -112,6 +112,8 @@ Before resume or stale-Run recovery, CareerOps compares the latest resumable che
 
 Migration is a separate explicit API action. The first migration supports only old unversioned checkpoints at known boundaries: learning graphs waiting at `human_review`, and outer Agent workflows waiting at a recognized Node edge. The caller must state `source_version: unversioned`; CareerOps verifies the actual source version, writes the current version through `update_state`, and records an audit Trace. Unknown versions and unknown Node boundaries remain blocked because no tested transform exists.
 
+Graph version 在“旧 checkpoint 按新代码恢复会改变含义”时升级，例如 State 必填字段或 reducer 改变、Node 重命名/拆分、条件边改变、interrupt 移动，或副作用与幂等边界改变。只修改日志、注释、内部算法且不改变可恢复 State/控制流语义时不需要升级。滚动部署、降级、导入其他环境的 checkpoint、手工修改数据库或跳过多个发布版本，都可能让 Runtime 看见自己没有迁移器的未知版本。
+
 The learning migration re-enters the side-effect-free `human_review` Node to recreate a real LangGraph interrupt. This is safe here because no external write occurs before `interrupt()`. A future migration across a Node that performs effects would need a purpose-built State transform and idempotency/reconciliation rule rather than this generic step.
 
 ## Try it through the API

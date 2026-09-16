@@ -9,28 +9,28 @@ This file contains only volatile development state. Stable architecture is in `R
 - Workspace: `E:\tmp\careerops-agent`
 - Remote: `https://github.com/peanutsmighty-source/careerops-agent`
 - Branch: `main`
-- Delivery state: T13 and its promotion-policy correction are committed and pushed; use `git log -1 --oneline` for the current immutable commit ID.
+- Delivery baseline: T13 and its promotion-policy correction are committed and pushed; use `git log -1 --oneline` for the current immutable commit ID.
 - Never print or commit `ds_key.txt` or environment API keys.
 
 ## Current Task
 
-Complete T13 Graph/checkpoint versioning and explicit migration.
+Complete T14 asynchronous AgentRun workers, startup recovery, and leases.
 
 Implemented and verified:
 
-- New learning and outer Agent workflow checkpoints persist graph versions.
-- History APIs expose stored/runtime versions and compatibility.
-- Resume and stale-Run recovery fail before Node/model/tool execution on incompatible checkpoints.
-- Explicit APIs migrate only supported unversioned checkpoints at known Node boundaries and record audit Traces.
-- Unknown versions and boundaries remain blocked.
+- `execution_mode: worker` persists and asynchronously executes AgentRuns; inline remains default.
+- All execution/recovery entry points use atomic AgentRun leases with heartbeat and expiry.
+- Duplicate delivery and concurrent manual recovery cannot execute a currently leased Run.
+- Startup scans and schedules stale running Runs automatically.
+- Existing recovery classification and T13 version preflight remain authoritative after lease acquisition.
 
-See `app/services/checkpoint_versioning.py` and `tests/test_checkpoint_versioning.py`.
+See `app/services/agent_run_lease.py`, `app/services/agent_run_worker.py`, and `tests/test_agent_run_workers.py`.
 
 ## Verification
 
-- Targeted checkpoint/version suite: 8 passed; promotion-policy suite: 3 passed.
-- Full suite: 89 passed (70.56 seconds under coverage).
-- Coverage with branch measurement: 89%.
+- Targeted worker/lease and compatibility suites pass.
+- Full suite: 94 passed (78.36 seconds under coverage).
+- Coverage with branch measurement: 88%; lease module: 80%, worker module: 82%.
 - `git diff --check`: passed.
 
 Use:
@@ -41,10 +41,10 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 
 ## Review Before Completion
 
-- A graph version describes control-flow compatibility, not database schema compatibility.
-- Only `unversioned -> v1` migration is implemented; it deliberately rejects unknown versions.
-- Learning migration re-enters only the side-effect-free human-review interrupt.
-- Agent recovery performs version preflight before inspecting or executing pending work.
+- Lease ownership is execution authority, not a recovery decision; unsafe tool outcomes still need review.
+- The in-process executor is not a durable queue; restart scanning recovers database-backed work.
+- Lease heartbeat cannot forcibly cancel a blocked SDK call; fencing tokens remain unfinished.
+- Startup recovery is one scan per process start, not a periodic scheduler.
 
 ## Present but Not Default-Wired
 
@@ -58,7 +58,7 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. Finish full verification, commit T13, and push using the user's existing push authorization.
-2. T14 is the next allowed Runtime task. T12 remains deferred by the user's RAG restriction.
+1. Finish full verification, commit T14, and push using the user's existing push authorization.
+2. T15 external-write reconciliation is next. T12 remains deferred by the user's RAG restriction.
 
 Do not start RAG or multi-agent work yet.

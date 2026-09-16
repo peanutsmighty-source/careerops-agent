@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.database import Base, engine, get_session
 from app.schema_compat import (
     ensure_agent_timing_columns,
+    ensure_agent_run_lease_columns,
     ensure_memory_candidate_columns,
     ensure_memory_revision_history,
     ensure_memory_scope_columns,
@@ -115,7 +116,12 @@ from app.services.authorization import (
     update_task_policy,
 )
 from app.services.tools import list_tools
-from app.services.agent_loop import create_agent_model, get_agent_run, list_agent_runs
+from app.services.agent_loop import (
+    create_agent_model,
+    create_agent_run,
+    get_agent_run,
+    list_agent_runs,
+)
 from app.services.agent_workflow import (
     agent_workflow_checkpoint_history,
     migrate_agent_workflow_checkpoint,
@@ -123,6 +129,7 @@ from app.services.agent_workflow import (
 )
 from app.services.checkpoint_versioning import CheckpointVersionError
 from app.services.agent_run_recovery import recover_stale_agent_runs
+from app.services.agent_run_worker import agent_run_workers
 from app.services.context_compaction import compact_agent_context
 from app.services.memory_runtime import assemble_memory_context, resolve_memory_scope
 from app.services.memory_lifecycle import retire_memory, retire_task_working_memories
@@ -146,8 +153,16 @@ def create_tables() -> None:
     ensure_memory_candidate_columns(engine)
     ensure_memory_revision_history(engine)
     ensure_agent_timing_columns(engine)
+    ensure_agent_run_lease_columns(engine)
     with Session(engine) as session:
         _get_or_create_active_goal_contract(session)
+    agent_run_workers.start()
+    agent_run_workers.schedule_startup_recovery()
+
+
+@app.on_event("shutdown")
+def stop_agent_run_workers() -> None:
+    agent_run_workers.shutdown()
 
 
 @app.get("/health")
@@ -467,6 +482,13 @@ def run_bounded_agent_loop(
 ):
     task = _get_agent_task_or_404(session, task_id)
     try:
+        if payload.execution_mode == "worker":
+            model = create_agent_model(payload.provider, payload.model)
+            run = create_agent_run(
+                session, task=task, model=model, max_steps=payload.max_steps
+            )
+            agent_run_workers.submit(run.id)
+            return get_agent_run(session, run.id)
         return start_agent_workflow(
             session,
             task=task,

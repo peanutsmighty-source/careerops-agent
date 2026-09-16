@@ -256,6 +256,18 @@ task.user_goal / user_input trace
 
 面试题：为什么 Candidate Builder 不应直接写 Durable Memory？回答要点：抽取器解决的是“可能值得记住什么”的召回问题，持久化解决的是可信度、作用域、冲突、敏感信息和生命周期问题；把两者合并会让模型或规则误报直接污染长期 Context。正确设计是 proposal -> provenance validation -> evaluation -> journal -> promotion，并用 precision/recall/false-positive rate 分别度量不同失败。
 
+## 26. Worker lease：异步执行不等于并发安全
+
+例如 API 把同一个 Run ID 重复投递两次，或者两个 CareerOps 实例同时在启动扫描中发现它。仅有线程池时，两边都可能读取 `status=running`，各自调用模型和工具。T14 在 `agent_runs` 行上增加 lease：不同 owner 用一条条件 UPDATE 竞争，只有一个成功；持有者定期续租，其他 worker 跳过，崩溃后由过期时间允许接管。
+
+API 的 `execution_mode: worker` 先提交 AgentRun，再返回可查询的 ID，后台 worker 重新读取持久化状态。同步 workflow、直接 AgentLoop、手动恢复和启动恢复也遵循同一租约协议，否则仍会留下绕过互斥的执行入口。启动时扫描陈旧 `running` Run 并投递 Recovery Manager；lease 解决“谁执行”，原有恢复分类解决“从哪里安全继续”。
+
+测试覆盖原子抢占、未过期拒绝、过期接管、错误 owner 无法续租/释放、重复投递只执行一次、手动恢复返回 `lease_conflict`，以及关闭再启动应用后自动恢复陈旧 Run。一次代码审查还发现 Future 可能在持锁期间立刻执行完成回调，导致回调再次获取同一非重入锁而自锁；把 callback 注册移出临界区后消除了这个线程池竞态。
+
+当前线程池不是持久消息队列。进程在提交数据库后、worker 执行前崩溃时，要等下次启动扫描；heartbeat 丢失也不能打断已阻塞的 SDK 调用。生产方案通常加入外部队列、周期扫描、调用超时、fencing token 和 PostgreSQL 锁监控。尤其是 fencing token：即使旧 worker 在租约过期后醒来，它的写入也必须因代次过旧而失败，单靠 owner 字符串仍不足以阻止所有迟到提交。
+
+面试题：为什么数据库里有 `status=running` 还需要 lease？回答要点：status 描述业务生命周期，不声明某个执行者的临时所有权；两个实例可同时读到 running。lease 用原子条件更新建立 owner、有效期和续租协议，崩溃后可接管；恢复分类、幂等键和 fencing 则分别处理断点语义、重复副作用和迟到写入。
+
 ## 25. Graph checkpoint 为什么必须带版本
 
 假设旧 checkpoint 的下一节点叫 `human_review`，新代码把它拆成风险检查和审批两个节点。旧 JSON 仍能反序列化，但直接 resume 可能跳过新增检查。T13 因此把 Graph 版本写入 State，并在 learning graph resume 和 AgentRun recovery 前执行兼容性预检；不兼容时在模型、工具和 Node 执行前停止。
