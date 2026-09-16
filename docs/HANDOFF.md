@@ -9,7 +9,7 @@ This file contains only volatile development state. Stable architecture is in `R
 - Workspace: `E:\tmp\careerops-agent`
 - Remote: `https://github.com/peanutsmighty-source/careerops-agent`
 - Branch: `main`
-- Latest pushed commit: `54927f9 Bound task memory and add retention cleanup`
+- Delivery state: T13 and its promotion-policy correction are committed and pushed; use `git log -1 --oneline` for the current immutable commit ID.
 - Never print or commit `ds_key.txt` or environment API keys.
 
 ## Current Task
