@@ -311,6 +311,7 @@ class ToolDefinitionRead(BaseModel):
     effect: Literal["read", "internal_write", "external_write"]
     idempotency_mode: Literal["none", "operation_key"]
     repeat_policy: Literal["always_allow", "naturally_idempotent", "business_unique"]
+    reconciliation_supported: bool
     input_schema: dict
 
 
@@ -368,6 +369,9 @@ class ToolCallRead(BaseModel):
     arguments: dict
     output: dict | None
     error: str | None
+    provider_operation_id: str | None
+    reconciliation_status: Literal["succeeded", "not_found", "pending", "unknown"] | None
+    reconciled_at: datetime | None
     duration_ms: float | None
     replayed: bool = False
     authorization_id: int | None
@@ -383,7 +387,14 @@ class ToolRecoveryDecisionRead(BaseModel):
     tool_call_id: int
     previous_status: str
     status: str
-    action: Literal["retried", "marked_outcome_unknown", "needs_review"]
+    action: Literal[
+        "retried",
+        "marked_outcome_unknown",
+        "reconciled_succeeded",
+        "retried_after_reconciliation",
+        "reconciliation_pending",
+        "needs_review",
+    ]
     reason: str
 
 

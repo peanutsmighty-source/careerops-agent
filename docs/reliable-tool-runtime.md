@@ -85,7 +85,7 @@ ToolCall 先以 `proposed` 持久化，再转为 `authorized` 和 `executing`。
 - handler 成功并提交：ToolCall 结果与执行 Trace 一起存在。
 - 同 key 重试：读取已有记录，不再次执行。
 
-外部 API 副作用仍不能由本地事务回滚。后续需要 `outcome_unknown`、外部 operation ID、状态查询和对账 worker。
+外部 API 副作用仍不能由本地事务回滚。Runtime 因此使用 `outcome_unknown`、provider operation ID 和工具专属 reconciliation adapter；周期性对账 worker 仍是后续生产化工作。
 
 ## 7. 常见 Agent 怎么处理
 
@@ -104,12 +104,13 @@ ToolCall 先以 `proposed` 持久化，再转为 `authorized` 和 `executing`。
 
 ## 8. 当前边界与下一步
 
-当前版本已完成持久化 ToolCall、按工具策略、operation key、fingerprint、重放、冲突、服务端 TaskPolicy、逐次 ToolAuthorization 和 UI 策略控制。
+当前版本已完成持久化 ToolCall、按工具策略、operation key、fingerprint、重放、冲突、服务端 TaskPolicy、逐次 ToolAuthorization、外部 operation ID 和 reconciliation adapter 协议。
 
 尚未完成：
 
 1. 基于登录用户身份的策略管理，以及外部写操作的一次性人工审批。
-2. 为外部工具注册 reconciliation adapter，让 `outcome_unknown` 可以自动查询外部结果。
+2. 接入真实外部写工具及其 provider adapter；当前仓库没有默认启用的外部写 provider，测试使用确定性 fake adapter 验证协议。
+3. 对 schema 变更使用正式数据库迁移工具。
 
 ## V3：中断恢复
 
@@ -124,5 +125,23 @@ ToolCall 先以 `proposed` 持久化，再转为 `authorized` 和 `executing`。
 | `outcome_unknown` 且没有对账适配器 | `needs_review` | 需要用户或外部查询接口确认真实结果 |
 
 每次恢复决定都会生成一条带 `recovery: true` 的 `ExecutionTrace`。这让恢复过程可审计，也让 Agent Loop 之后只能消费已经明确的工具结果。
-3. 对 schema 变更使用正式数据库迁移工具。
-4. LLM 根据 observation 决定下一动作的 Agent Loop。
+
+## V4：外部写入对账
+
+外部写入最危险的窗口不是明确失败，而是“provider 已经创建成功，本地却在收到响应前超时”。此时直接重试可能重复发消息、创建工单或扣费。CareerOps 用以下状态流避免把网络失败误当成业务失败：
+
+```text
+external handler reports provider operation ID + timeout
+  -> ToolCall.outcome_unknown
+  -> reconciliation adapter queries that exact provider operation ID
+     -> succeeded: restore provider output; never call write handler again
+     -> pending/unknown: keep outcome_unknown; query again later
+     -> not_found: re-authorize; only then retry the saved request
+     -> missing ID/adapter: needs_review
+```
+
+`ExternalOperationUncertainError` 是 handler 与 Runtime 的显式边界：handler 只有在已经拿到 provider operation ID、但无法确认最终响应时才使用它。Runtime 把 ID 保存到 `ToolCallRecord.provider_operation_id`，并且不把本地调用标成 `failed`。恢复逻辑位于 `tool_recovery.py`，adapter 是 `ToolDefinition.reconciler` 上的确定性 provider 查询函数，不由 LLM 猜测结果。
+
+对账保存 `reconciliation_status` 和 `reconciled_at`，每次决定还写入新的 Trace。`attempt_count` 只在真正调用写 handler 时增加；查询 provider 状态不算写入 attempt。测试明确断言 timeout-after-success 的 write handler 只运行一次。
+
+当前最小实现的边界：没有默认启用的真实 external-write provider；没有周期性对账调度器；`not_found` 后的重试仍受 TaskPolicy 控制，而一次性人工批准由 T16 实现；SQLite 兼容升级只是开发期方案，生产数据库仍应使用正式 migration。

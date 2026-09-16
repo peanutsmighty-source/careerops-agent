@@ -16,6 +16,18 @@ ToolPermission = Literal["read", "write"]
 ToolEffect = Literal["read", "internal_write", "external_write"]
 IdempotencyMode = Literal["none", "operation_key"]
 RepeatPolicy = Literal["always_allow", "naturally_idempotent", "business_unique"]
+ReconciliationStatus = Literal["succeeded", "not_found", "pending", "unknown"]
+
+
+class ExternalOperationUncertainError(RuntimeError):
+    """The provider accepted an operation, but its final outcome was not received."""
+
+    def __init__(self, provider_operation_id: str, message: str = "external outcome unknown"):
+        super().__init__(message)
+        normalized = provider_operation_id.strip()
+        if not normalized:
+            raise ValueError("provider operation ID must not be blank")
+        self.provider_operation_id = normalized
 
 
 class ToolArguments(BaseModel):
@@ -51,6 +63,16 @@ ToolHandler = Callable[[ToolContext, ToolArguments], dict]
 
 
 @dataclass(frozen=True)
+class ReconciliationResult:
+    status: ReconciliationStatus
+    output: dict | None = None
+    detail: str | None = None
+
+
+ToolReconciler = Callable[[ToolContext, str], ReconciliationResult]
+
+
+@dataclass(frozen=True)
 class ToolDefinition:
     name: str
     description: str
@@ -60,6 +82,7 @@ class ToolDefinition:
     repeat_policy: RepeatPolicy
     arguments_model: type[ToolArguments]
     handler: ToolHandler
+    reconciler: ToolReconciler | None = None
 
     def public_schema(self) -> dict:
         return {
@@ -69,6 +92,7 @@ class ToolDefinition:
             "effect": self.effect,
             "idempotency_mode": self.idempotency_mode,
             "repeat_policy": self.repeat_policy,
+            "reconciliation_supported": self.reconciler is not None,
             "input_schema": self.arguments_model.model_json_schema(),
         }
 
@@ -77,11 +101,12 @@ class ToolDefinition:
 class ToolExecution:
     tool_name: str
     permission: str | None
-    status: Literal["success", "error", "denied"]
+    status: Literal["success", "error", "denied", "outcome_unknown"]
     arguments: dict
     output: dict | None
     error: str | None
     duration_ms: float
+    provider_operation_id: str | None = None
 
 
 def _search_jobs(context: ToolContext, arguments: ToolArguments) -> dict:
@@ -242,6 +267,25 @@ def execute_tool(
     try:
         with context.session.begin_nested():
             output = definition.handler(context, validated)
+    except ExternalOperationUncertainError as exc:
+        if definition.effect != "external_write":
+            return _result(
+                started_at,
+                tool_name,
+                definition.permission,
+                "error",
+                validated.model_dump(),
+                error="only external-write tools may report an uncertain provider operation",
+            )
+        return _result(
+            started_at,
+            tool_name,
+            definition.permission,
+            "outcome_unknown",
+            validated.model_dump(),
+            error=str(exc),
+            provider_operation_id=exc.provider_operation_id,
+        )
     except ValueError as exc:
         return _result(
             started_at,
@@ -274,11 +318,12 @@ def _result(
     started_at: float,
     tool_name: str,
     permission: str | None,
-    status: Literal["success", "error", "denied"],
+    status: Literal["success", "error", "denied", "outcome_unknown"],
     arguments: dict,
     *,
     output: dict | None = None,
     error: str | None = None,
+    provider_operation_id: str | None = None,
 ) -> ToolExecution:
     return ToolExecution(
         tool_name=tool_name,
@@ -288,6 +333,7 @@ def _result(
         output=output,
         error=error,
         duration_ms=round((perf_counter() - started_at) * 1000, 3),
+        provider_operation_id=provider_operation_id,
     )
 
 

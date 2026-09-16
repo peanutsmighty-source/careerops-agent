@@ -135,12 +135,16 @@ def run_tool_call(
         "success": "succeeded",
         "error": "failed",
         "denied": "denied",
+        "outcome_unknown": "outcome_unknown",
     }[execution.status]
     record.arguments_json = execution.arguments
     record.output_json = execution.output
     record.error = execution.error
+    record.provider_operation_id = execution.provider_operation_id
     record.duration_ms = execution.duration_ms
-    record.completed_at = datetime.utcnow()
+    record.completed_at = (
+        None if execution.status == "outcome_unknown" else datetime.utcnow()
+    )
 
     trace = ExecutionTrace(
         task_id=task.id,
@@ -169,6 +173,7 @@ def run_tool_call(
             "arguments": execution.arguments,
             "output": execution.output,
             "error": execution.error,
+            "provider_operation_id": execution.provider_operation_id,
             "duration_ms": execution.duration_ms,
         },
     )
@@ -200,6 +205,7 @@ def retry_persisted_tool_call(
     definition = get_tool(record.tool_name)
     if not definition:
         raise UnknownToolError("unknown tool")
+    reconciled_provider_operation_id = record.provider_operation_id
 
     record.status = "executing"
     record.attempt_count += 1
@@ -218,12 +224,16 @@ def retry_persisted_tool_call(
         "success": "succeeded",
         "error": "failed",
         "denied": "denied",
+        "outcome_unknown": "outcome_unknown",
     }[execution.status]
     record.arguments_json = execution.arguments
     record.output_json = execution.output
     record.error = execution.error
+    record.provider_operation_id = execution.provider_operation_id
     record.duration_ms = execution.duration_ms
-    record.completed_at = datetime.utcnow()
+    record.completed_at = (
+        None if execution.status == "outcome_unknown" else datetime.utcnow()
+    )
     trace = ExecutionTrace(
         task_id=task.id,
         plan_step_id=record.plan_step_id,
@@ -245,6 +255,9 @@ def retry_persisted_tool_call(
             "arguments": execution.arguments,
             "output": execution.output,
             "error": execution.error,
+            "provider_operation_id": execution.provider_operation_id,
+            "reconciled_provider_operation_id": reconciled_provider_operation_id,
+            "reconciliation_status": record.reconciliation_status,
         },
     )
     session.add(trace)
@@ -291,6 +304,9 @@ def serialize_tool_call(record: ToolCallRecord, *, replayed: bool = False) -> di
         "arguments": record.arguments_json,
         "output": record.output_json,
         "error": record.error,
+        "provider_operation_id": record.provider_operation_id,
+        "reconciliation_status": record.reconciliation_status,
+        "reconciled_at": record.reconciled_at,
         "duration_ms": record.duration_ms,
         "replayed": replayed,
         "authorization_id": authorization.id if authorization else None,

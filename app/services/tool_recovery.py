@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.models import AgentTask, ExecutionTrace, ToolCallRecord
 from app.services.authorization import authorize_tool_call
 from app.services.tool_runtime import retry_persisted_tool_call
-from app.services.tools import get_tool
+from app.services.tools import ReconciliationResult, ToolContext, get_tool
 
 
 RECOVERABLE_STATUSES = ("proposed", "authorized", "executing", "outcome_unknown")
@@ -56,7 +56,12 @@ def recover_stale_tool_calls(
         task_id=task.id,
         stale_before=stale_before,
         scanned_count=len(records),
-        recovered_count=sum(decision.action == "retried" for decision in decisions),
+        recovered_count=sum(
+            decision.action in {
+                "retried", "reconciled_succeeded", "retried_after_reconciliation"
+            }
+            for decision in decisions
+        ),
         decisions=decisions,
     )
 
@@ -75,12 +80,7 @@ def _recover_record(
         )
 
     if previous_status == "outcome_unknown":
-        return _mark_for_review(
-            session,
-            record,
-            previous_status,
-            "No external reconciliation adapter is registered for this tool.",
-        )
+        return _reconcile_external_write(session, task, record, previous_status)
 
     if record.effect == "external_write":
         record.status = "outcome_unknown"
@@ -140,6 +140,139 @@ def _recover_record(
     )
 
 
+def _reconcile_external_write(
+    session: Session,
+    task: AgentTask,
+    record: ToolCallRecord,
+    previous_status: str,
+) -> RecoveryDecision:
+    definition = get_tool(record.tool_name)
+    if not definition or not definition.reconciler:
+        return _mark_for_review(
+            session,
+            record,
+            previous_status,
+            "No external reconciliation adapter is registered for this tool.",
+        )
+    if not record.provider_operation_id:
+        return _mark_for_review(
+            session,
+            record,
+            previous_status,
+            "The provider operation ID was not persisted, so the external outcome cannot be queried.",
+        )
+
+    try:
+        result = definition.reconciler(
+            ToolContext(session=session, task=task), record.provider_operation_id
+        )
+        if not isinstance(result, ReconciliationResult):
+            raise TypeError("adapter returned an invalid reconciliation result")
+        if result.status not in {"succeeded", "not_found", "pending", "unknown"}:
+            raise ValueError("adapter returned an unsupported reconciliation status")
+    except Exception as exc:
+        return _keep_reconciliation_pending(
+            session,
+            record,
+            previous_status,
+            status="unknown",
+            reason=f"Provider reconciliation failed ({type(exc).__name__}); retry the query later.",
+        )
+
+    record.reconciliation_status = result.status
+    record.reconciled_at = datetime.utcnow()
+    if result.status == "succeeded":
+        record.status = "succeeded"
+        record.output_json = result.output
+        record.error = None
+        record.completed_at = datetime.utcnow()
+        reason = result.detail or "The provider confirmed that the external operation succeeded."
+        _add_recovery_trace(
+            session,
+            record,
+            status="reconciled",
+            output_summary=reason,
+            previous_status=previous_status,
+            reconciliation_status=result.status,
+        )
+        session.commit()
+        return RecoveryDecision(
+            tool_call_id=record.id,
+            previous_status=previous_status,
+            status=record.status,
+            action="reconciled_succeeded",
+            reason=reason,
+        )
+
+    if result.status == "not_found":
+        authorization = authorize_tool_call(
+            session,
+            task=task,
+            record=record,
+            definition=definition,
+        )
+        if not authorization.allowed:
+            return _mark_for_review(
+                session,
+                record,
+                previous_status,
+                "The provider confirmed no operation exists, but retry authorization failed: "
+                f"{authorization.authorization.reason}",
+            )
+        retry_persisted_tool_call(session, task=task, record=record)
+        return RecoveryDecision(
+            tool_call_id=record.id,
+            previous_status=previous_status,
+            status=record.status,
+            action="retried_after_reconciliation",
+            reason=(
+                result.detail
+                or "The provider confirmed that no operation exists, so the saved request was retried."
+            ),
+        )
+
+    return _keep_reconciliation_pending(
+        session,
+        record,
+        previous_status,
+        status=result.status,
+        reason=(
+            result.detail
+            or "The provider has not reached a terminal outcome; no retry was attempted."
+        ),
+    )
+
+
+def _keep_reconciliation_pending(
+    session: Session,
+    record: ToolCallRecord,
+    previous_status: str,
+    *,
+    status: str,
+    reason: str,
+) -> RecoveryDecision:
+    record.status = "outcome_unknown"
+    record.reconciliation_status = status
+    record.reconciled_at = datetime.utcnow()
+    record.error = reason
+    _add_recovery_trace(
+        session,
+        record,
+        status="reconciliation_pending",
+        output_summary=reason,
+        previous_status=previous_status,
+        reconciliation_status=status,
+    )
+    session.commit()
+    return RecoveryDecision(
+        tool_call_id=record.id,
+        previous_status=previous_status,
+        status=record.status,
+        action="reconciliation_pending",
+        reason=reason,
+    )
+
+
 def recover_tool_call(
     session: Session, *, task: AgentTask, record: ToolCallRecord
 ) -> RecoveryDecision:
@@ -179,6 +312,7 @@ def _add_recovery_trace(
     status: str,
     output_summary: str,
     previous_status: str,
+    reconciliation_status: str | None = None,
 ) -> None:
     session.add(
         ExecutionTrace(
@@ -194,6 +328,8 @@ def _add_recovery_trace(
                 "effect": record.effect,
                 "previous_status": previous_status,
                 "recovery": True,
+                "provider_operation_id": record.provider_operation_id,
+                "reconciliation_status": reconciliation_status,
             },
         )
     )

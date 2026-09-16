@@ -242,3 +242,37 @@ def ensure_agent_run_lease_columns(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS ix_agent_runs_lease_expires_at "
             "ON agent_runs (lease_expires_at)"
         ))
+
+
+def ensure_tool_reconciliation_columns(engine: Engine) -> None:
+    """Add provider reconciliation fields to existing development ToolCall tables."""
+    inspector = inspect(engine)
+    if not inspector.has_table("tool_calls"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("tool_calls")}
+    missing = {
+        "provider_operation_id", "reconciliation_status", "reconciled_at"
+    } - columns
+    if missing and engine.dialect.name != "sqlite":
+        raise RuntimeError("tool_calls requires a database migration for reconciliation")
+    if engine.dialect.name != "sqlite":
+        return
+    statements = {
+        "provider_operation_id": (
+            "ALTER TABLE tool_calls ADD COLUMN provider_operation_id VARCHAR(240)"
+        ),
+        "reconciliation_status": (
+            "ALTER TABLE tool_calls ADD COLUMN reconciliation_status VARCHAR(30)"
+        ),
+        "reconciled_at": "ALTER TABLE tool_calls ADD COLUMN reconciled_at DATETIME",
+    }
+    with engine.begin() as connection:
+        for column in (
+            "provider_operation_id", "reconciliation_status", "reconciled_at"
+        ):
+            if column in missing:
+                connection.execute(text(statements[column]))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_tool_calls_provider_operation_id "
+            "ON tool_calls (provider_operation_id)"
+        ))

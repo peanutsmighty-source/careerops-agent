@@ -116,7 +116,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `AgentTask`: a user-level goal contract with constraints, success criteria, and runtime status.
 - `PlanStep`: ordered work that must map to an `AgentTask` success criterion.
 - `ExecutionTrace`: immutable-style event history for user input, plans, tool calls, evaluation, and context compaction.
-- `ToolCallRecord`: durable current state for one tool operation, including strategy, idempotency identity, attempts, replays, and result.
+- `ToolCallRecord`: durable current state for one tool operation, including strategy, idempotency identity, attempts, replays, provider operation identity, reconciliation state, and result.
 - `TaskPolicy`: server-side allowlist and risk rules for tools available to one task.
 - `ToolAuthorization`: an auditable allow, deny, or approval-required decision for one ToolCall under one policy version.
 - `AgentRun`: one bounded model/tool execution with a final status, answer, and stop reason.
@@ -146,7 +146,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `POST /agent/tasks/{task_id}/resume-learning-graph`: approve or reject the interrupted plan and resume the same graph thread.
 - `POST /agent/tasks/{task_id}/migrate-learning-graph-checkpoint`: explicitly migrate a supported unversioned learning checkpoint before resume.
 - `GET /agent/tasks/{task_id}/graph-checkpoints`: inspect every persisted State snapshot and next Node.
-- `GET /agent/tools`: inspect registered tool descriptions, permissions, and JSON argument schemas.
+- `GET /agent/tools`: inspect registered tool descriptions, permissions, JSON argument schemas, and whether an external reconciliation adapter is available.
 - `GET /agent/tasks/{task_id}/tool-policy`: inspect the server-side tool policy for one task.
 - `PUT /agent/tasks/{task_id}/tool-policy`: update the task's tool allowlist from the control plane.
 - `POST /agent/tasks/{task_id}/tool-calls`: validate, authorize, execute, and trace one tool invocation.
@@ -155,6 +155,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `GET /agent/tasks/{task_id}/agent-runs`: inspect model steps, observations, and stop reasons.
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/checkpoints`: inspect the outer workflow's Node-level State history.
 - `POST /agent/tasks/{task_id}/agent-runs/{run_id}/migrate-checkpoint`: explicitly migrate a supported unversioned outer-workflow checkpoint. Incompatible recovery is stopped before model or tool execution.
+- `POST /agent/tasks/{task_id}/recover-tool-calls`: recover stale calls by effect type; external writes query their provider operation ID through the registered reconciliation adapter before any retry.
 - `POST /agent/tasks/{task_id}/recover-agent-runs`: classify and recover stale AgentRuns without blindly repeating ambiguous tools.
 - Every execution and recovery path acquires an atomic database lease on the AgentRun. The owner heartbeats while working; duplicate deliveries skip an active lease, and another instance may take over only after expiry. Application startup schedules stale `running` Runs for recovery.
 - `GET /agent/tasks/{task_id}/memory-context`: preview the GoalContract and selected non-expired memories; `memory_token_budget` limits the Memory portion.

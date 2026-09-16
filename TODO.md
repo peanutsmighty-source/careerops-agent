@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 14 complete and 4 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **18 capabilities**: 15 complete and 3 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -83,7 +83,7 @@ Tracked count: **18 capabilities**: 14 complete and 4 open. Sources: 8 `user-dir
   - Acceptance: only one worker owns a Run and stale work is recovered automatically.
   - Minimal implementation: optional in-process worker execution, atomic database leases with heartbeat/expiry, duplicate-delivery exclusion, and startup scheduling of stale Runs. A durable external queue and distributed cancellation remain future production work.
 
-- [ ] **T15 Add external-write reconciliation adapters** (`user-direct`)
+- [x] **T15 Add external-write reconciliation adapters** (`user-direct`)
   - Query operation status by provider operation ID before retrying an unknown outcome.
   - Acceptance: timeout-after-success does not duplicate an external side effect.
 

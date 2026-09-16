@@ -3,6 +3,7 @@ from sqlalchemy import create_engine, inspect
 from app.schema_compat import (
     ensure_agent_timing_columns,
     ensure_agent_run_lease_columns,
+    ensure_tool_reconciliation_columns,
     ensure_memory_candidate_columns,
     ensure_memory_revision_history,
     ensure_memory_scope_columns,
@@ -171,3 +172,23 @@ def test_agent_run_lease_upgrade_preserves_existing_rows(tmp_path):
             "SELECT id, task_id, status, lease_owner, lease_expires_at, lease_heartbeat_at "
             "FROM agent_runs WHERE id = 3"
         ).one() == (3, 7, "running", None, None, None)
+
+
+def test_tool_reconciliation_upgrade_preserves_existing_rows(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-tool-reconciliation.db'}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE tool_calls (id INTEGER PRIMARY KEY, task_id INTEGER, status VARCHAR(30))"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO tool_calls (id, task_id, status) VALUES (3, 7, 'outcome_unknown')"
+        )
+    ensure_tool_reconciliation_columns(engine)
+    ensure_tool_reconciliation_columns(engine)
+    columns = {column["name"] for column in inspect(engine).get_columns("tool_calls")}
+    assert {"provider_operation_id", "reconciliation_status", "reconciled_at"} <= columns
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT id, status, provider_operation_id, reconciliation_status, reconciled_at "
+            "FROM tool_calls WHERE id = 3"
+        ).one() == (3, "outcome_unknown", None, None, None)

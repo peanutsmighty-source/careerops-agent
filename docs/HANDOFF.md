@@ -9,28 +9,29 @@ This file contains only volatile development state. Stable architecture is in `R
 - Workspace: `E:\tmp\careerops-agent`
 - Remote: `https://github.com/peanutsmighty-source/careerops-agent`
 - Branch: `main`
-- Delivery baseline: T13 and its promotion-policy correction are committed and pushed; use `git log -1 --oneline` for the current immutable commit ID.
+- Delivery baseline: T15 is complete; use `git log -1 --oneline` for the current immutable commit ID.
 - Never print or commit `ds_key.txt` or environment API keys.
 
 ## Current Task
 
-Complete T14 asynchronous AgentRun workers, startup recovery, and leases.
+Complete T15 external-write reconciliation adapters.
 
 Implemented and verified:
 
-- `execution_mode: worker` persists and asynchronously executes AgentRuns; inline remains default.
-- All execution/recovery entry points use atomic AgentRun leases with heartbeat and expiry.
-- Duplicate delivery and concurrent manual recovery cannot execute a currently leased Run.
-- Startup scans and schedules stale running Runs automatically.
-- Existing recovery classification and T13 version preflight remain authoritative after lease acquisition.
+- External handlers can report an uncertain outcome together with a provider operation ID.
+- `ToolCallRecord` persists provider operation identity, reconciliation state, and reconciliation time.
+- Each external tool may register a deterministic reconciliation adapter.
+- Provider-confirmed success restores the result without a duplicate external write.
+- Pending/unknown provider status remains `outcome_unknown`; provider-confirmed absence is re-authorized before retry.
+- Missing operation identity or adapter remains a `needs_review` boundary.
 
-See `app/services/agent_run_lease.py`, `app/services/agent_run_worker.py`, and `tests/test_agent_run_workers.py`.
+See `app/services/tools.py`, `app/services/tool_recovery.py`, and `tests/test_tool_reconciliation.py`.
 
 ## Verification
 
-- Targeted worker/lease and compatibility suites pass.
-- Full suite: 94 passed (78.36 seconds under coverage).
-- Coverage with branch measurement: 88%; lease module: 80%, worker module: 82%.
+- Targeted reconciliation and compatibility suites: 9 passed.
+- Full suite: 98 passed (81.93 seconds under branch coverage).
+- Coverage with branch measurement: 88%; reconciliation module: 92%, Tool Runtime: 91%.
 - `git diff --check`: passed.
 
 Use:
@@ -41,10 +42,10 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 
 ## Review Before Completion
 
-- Lease ownership is execution authority, not a recovery decision; unsafe tool outcomes still need review.
-- The in-process executor is not a durable queue; restart scanning recovers database-backed work.
-- Lease heartbeat cannot forcibly cancel a blocked SDK call; fencing tokens remain unfinished.
-- Startup recovery is one scan per process start, not a periodic scheduler.
+- A provider operation ID is required for deterministic reconciliation; without it the Runtime cannot infer an outcome.
+- Adapter status is provider evidence, not an LLM judgment.
+- There is no default real external-write provider or periodic reconciliation worker yet.
+- `not_found` permits a retry path only after current TaskPolicy authorization; T16 will add attributable one-time approval.
 
 ## Present but Not Default-Wired
 
@@ -58,7 +59,7 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. Finish full verification, commit T14, and push using the user's existing push authorization.
-2. T15 external-write reconciliation is next. T12 remains deferred by the user's RAG restriction.
+1. T16 authenticated identity and one-time external-write approval is next.
+2. T12 remains deferred by the user's RAG restriction; do not begin RAG or multi-agent work early.
 
 Do not start RAG or multi-agent work yet.

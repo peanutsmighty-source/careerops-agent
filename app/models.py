@@ -497,6 +497,13 @@ class ToolCallRecord(Base):
     replay_count: Mapped[int] = mapped_column(Integer, default=0)
     output_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_operation_id: Mapped[str | None] = mapped_column(
+        String(240), nullable=True, index=True
+    )
+    reconciliation_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     duration_ms: Mapped[float | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

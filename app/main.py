@@ -14,6 +14,7 @@ from app.database import Base, engine, get_session
 from app.schema_compat import (
     ensure_agent_timing_columns,
     ensure_agent_run_lease_columns,
+    ensure_tool_reconciliation_columns,
     ensure_memory_candidate_columns,
     ensure_memory_revision_history,
     ensure_memory_scope_columns,
@@ -154,6 +155,7 @@ def create_tables() -> None:
     ensure_memory_revision_history(engine)
     ensure_agent_timing_columns(engine)
     ensure_agent_run_lease_columns(engine)
+    ensure_tool_reconciliation_columns(engine)
     with Session(engine) as session:
         _get_or_create_active_goal_contract(session)
     agent_run_workers.start()
