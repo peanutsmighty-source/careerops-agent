@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 12 complete and 6 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **18 capabilities**: 13 complete and 5 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -75,8 +75,9 @@ Tracked count: **18 capabilities**: 12 complete and 6 open. Sources: 8 `user-dir
 
 ## P2 - Runtime Reliability
 
-- [ ] **T13 Version Graphs and migrate old checkpoints** (`user-direct`)
+- [x] **T13 Version Graphs and migrate old checkpoints** (`user-direct`)
   - Acceptance: a checkpoint records graph version and incompatible resumes fail safely or migrate explicitly.
+  - Both learning-plan and outer Agent workflows persist versions. Resume/recovery performs a preflight compatibility check; explicit v1 migration is intentionally limited to known unversioned Node boundaries.
 
 - [ ] **T14 Add asynchronous workers, startup recovery, leases, and multi-instance exclusion** (`user-derived`)
   - Acceptance: only one worker owns a Run and stale work is recovered automatically.

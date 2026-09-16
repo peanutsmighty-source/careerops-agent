@@ -12,9 +12,19 @@ from app.database import SessionLocal
 from app.models import AgentTask
 from app.services.analytics import skill_demand_rows
 from app.services.roadmap import build_learning_roadmap
+from app.services.checkpoint_versioning import (
+    UNVERSIONED_CHECKPOINT,
+    checkpoint_version,
+    require_checkpoint_version,
+    require_explicit_source_version,
+)
+
+
+LEARNING_GRAPH_VERSION = "learning-plan-v1"
 
 
 class CareerOpsState(TypedDict, total=False):
+    graph_version: str
     task_id: int
     user_goal: str
     success_criteria: list[str]
@@ -158,9 +168,13 @@ def _interrupt_payload(snapshot) -> dict | None:
 
 def _graph_result(task: AgentTask) -> dict:
     snapshot = learning_graph.get_state(_graph_config(task))
+    state = dict(snapshot.values)
     return {
         "thread_id": graph_thread_id(task),
-        "state": dict(snapshot.values),
+        "graph_version": checkpoint_version(state),
+        "runtime_graph_version": LEARNING_GRAPH_VERSION,
+        "checkpoint_compatible": checkpoint_version(state) == LEARNING_GRAPH_VERSION,
+        "state": state,
         "awaiting_approval": bool(snapshot.interrupts),
         "interrupt": _interrupt_payload(snapshot),
         "next_nodes": list(snapshot.next),
@@ -171,9 +185,15 @@ def start_learning_graph(task: AgentTask) -> dict:
     config = _graph_config(task)
     current = learning_graph.get_state(config)
     if current.values:
+        require_checkpoint_version(
+            dict(current.values),
+            graph_name="learning graph",
+            expected_version=LEARNING_GRAPH_VERSION,
+        )
         return _graph_result(task)
     learning_graph.invoke(
         {
+            "graph_version": LEARNING_GRAPH_VERSION,
             "task_id": task.id,
             "user_goal": task.user_goal,
             "success_criteria": task.success_criteria,
@@ -195,6 +215,11 @@ def resume_learning_graph(task: AgentTask, *, approved: bool, comment: str | Non
     current = learning_graph.get_state(config)
     if not current.interrupts:
         raise ValueError("learning graph is not waiting for approval")
+    require_checkpoint_version(
+        dict(current.values),
+        graph_name="learning graph",
+        expected_version=LEARNING_GRAPH_VERSION,
+    )
     learning_graph.invoke(
         Command(resume={"approved": approved, "comment": comment}),
         config=config,
@@ -210,7 +235,37 @@ def checkpoint_history(task: AgentTask) -> list[dict]:
             "checkpoint_id": snapshot.config["configurable"].get("checkpoint_id"),
             "step": snapshot.metadata.get("step"),
             "next_nodes": list(snapshot.next),
+            "graph_version": checkpoint_version(dict(snapshot.values)),
+            "runtime_graph_version": LEARNING_GRAPH_VERSION,
+            "checkpoint_compatible": (
+                checkpoint_version(dict(snapshot.values)) == LEARNING_GRAPH_VERSION
+            ),
             "state": dict(snapshot.values),
         }
         for snapshot in snapshots
     ]
+
+
+def migrate_learning_graph_checkpoint(task: AgentTask, *, source_version: str) -> dict:
+    config = _graph_config(task)
+    snapshot = learning_graph.get_state(config)
+    if not snapshot.values:
+        raise ValueError("learning graph has no checkpoint to migrate")
+    require_explicit_source_version(dict(snapshot.values), source_version=source_version)
+    if source_version != UNVERSIONED_CHECKPOINT:
+        raise ValueError(f"no learning graph migration exists from '{source_version}'")
+    next_nodes = list(snapshot.next)
+    if next_nodes != ["human_review"]:
+        raise ValueError(
+            "unversioned learning graph migration only supports the human-review boundary"
+        )
+    learning_graph.update_state(
+        config, {"graph_version": LEARNING_GRAPH_VERSION}, as_node="validate_plan"
+    )
+    # Re-enter the side-effect-free review node so the migrated checkpoint is
+    # once again an actual LangGraph interrupt, not merely a pending edge.
+    learning_graph.invoke(None, config=config)
+    result = _graph_result(task)
+    if not result["checkpoint_compatible"]:
+        raise ValueError("learning graph migration did not produce a compatible checkpoint")
+    return result

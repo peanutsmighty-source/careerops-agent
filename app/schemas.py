@@ -484,6 +484,9 @@ class AgentRunRecoveryRead(BaseModel):
 
 class LearningGraphRunRead(BaseModel):
     thread_id: str
+    graph_version: str
+    runtime_graph_version: str
+    checkpoint_compatible: bool
     state: dict
     checkpoint_count: int
     awaiting_approval: bool
@@ -496,10 +499,26 @@ class LearningGraphResumeCreate(BaseModel):
     comment: str | None = None
 
 
+class GraphCheckpointMigrationCreate(BaseModel):
+    source_version: str = Field(min_length=1, max_length=80)
+
+
+class GraphCheckpointMigrationRead(BaseModel):
+    thread_id: str
+    graph_version: str
+    runtime_graph_version: str
+    checkpoint_compatible: bool
+    next_nodes: list[str]
+    state: dict
+
+
 class GraphCheckpointRead(BaseModel):
     checkpoint_id: str | None
     step: int | None
     next_nodes: list[str]
+    graph_version: str
+    runtime_graph_version: str
+    checkpoint_compatible: bool
     state: dict
 
 

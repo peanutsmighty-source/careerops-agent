@@ -51,6 +51,8 @@ from app.schemas import (
     ExecutionTraceCreate,
     ExecutionTraceRead,
     GraphCheckpointRead,
+    GraphCheckpointMigrationCreate,
+    GraphCheckpointMigrationRead,
     GoalContractCreate,
     GoalContractRead,
     JobArchiveCreate,
@@ -94,6 +96,7 @@ from app.services.learning_graph import (
     graph_thread_id,
     resume_learning_graph,
     start_learning_graph,
+    migrate_learning_graph_checkpoint,
 )
 from app.services.roadmap import build_learning_roadmap, build_learning_tasks
 from app.services.runtime import validate_plan_step
@@ -112,11 +115,13 @@ from app.services.authorization import (
     update_task_policy,
 )
 from app.services.tools import list_tools
-from app.services.agent_loop import get_agent_run, list_agent_runs
+from app.services.agent_loop import create_agent_model, get_agent_run, list_agent_runs
 from app.services.agent_workflow import (
     agent_workflow_checkpoint_history,
+    migrate_agent_workflow_checkpoint,
     start_agent_workflow,
 )
+from app.services.checkpoint_versioning import CheckpointVersionError
 from app.services.agent_run_recovery import recover_stale_agent_runs
 from app.services.context_compaction import compact_agent_context
 from app.services.memory_runtime import assemble_memory_context, resolve_memory_scope
@@ -669,7 +674,10 @@ def run_agent_learning_graph(
     task_id: int, session: Session = Depends(get_session)
 ) -> dict:
     task = _get_agent_task_or_404(session, task_id)
-    result = start_learning_graph(task)
+    try:
+        result = start_learning_graph(task)
+    except CheckpointVersionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     state = result["state"]
     history = checkpoint_history(task)
     if result["awaiting_approval"]:
@@ -720,7 +728,7 @@ def resume_agent_learning_graph(
             approved=payload.approved,
             comment=payload.comment,
         )
-    except ValueError as exc:
+    except (ValueError, CheckpointVersionError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     state = result["state"]
@@ -764,6 +772,72 @@ def list_graph_checkpoints(
 ) -> list[dict]:
     task = _get_agent_task_or_404(session, task_id)
     return checkpoint_history(task)
+
+
+@app.post(
+    "/agent/tasks/{task_id}/migrate-learning-graph-checkpoint",
+    response_model=LearningGraphRunRead,
+)
+def migrate_agent_learning_graph_checkpoint(
+    task_id: int,
+    payload: GraphCheckpointMigrationCreate,
+    session: Session = Depends(get_session),
+) -> dict:
+    task = _get_agent_task_or_404(session, task_id)
+    try:
+        result = migrate_learning_graph_checkpoint(
+            task, source_version=payload.source_version
+        )
+    except (ValueError, CheckpointVersionError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    history = checkpoint_history(task)
+    session.add(ExecutionTrace(
+        task_id=task.id,
+        event_type="evaluation",
+        status="migrated",
+        input_summary=f"Migrate learning graph checkpoint from {payload.source_version}.",
+        output_summary=f"Checkpoint now uses {result['graph_version']}.",
+        metadata_json={"thread_id": result["thread_id"],
+                       "source_version": payload.source_version,
+                       "target_version": result["graph_version"]},
+    ))
+    session.commit()
+    return {**result, "checkpoint_count": len(history)}
+
+
+@app.post(
+    "/agent/tasks/{task_id}/agent-runs/{run_id}/migrate-checkpoint",
+    response_model=GraphCheckpointMigrationRead,
+)
+def migrate_agent_run_checkpoint(
+    task_id: int,
+    run_id: int,
+    payload: GraphCheckpointMigrationCreate,
+    session: Session = Depends(get_session),
+) -> dict:
+    _get_agent_task_or_404(session, task_id)
+    try:
+        run = get_agent_run(session, run_id)
+        if run.task_id != task_id:
+            raise ValueError("agent run not found")
+        model = create_agent_model(run.provider, run.model)
+        result = migrate_agent_workflow_checkpoint(
+            run, model, source_version=payload.source_version
+        )
+    except (ValueError, CheckpointVersionError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    session.add(ExecutionTrace(
+        task_id=task_id,
+        event_type="agent_run",
+        status="migrated",
+        input_summary=f"Migrate Agent workflow checkpoint from {payload.source_version}.",
+        output_summary=f"Checkpoint now uses {result['graph_version']}.",
+        metadata_json={"agent_run_id": run_id, "thread_id": result["thread_id"],
+                       "source_version": payload.source_version,
+                       "target_version": result["graph_version"]},
+    ))
+    session.commit()
+    return result
 
 
 @app.post("/jobs", response_model=JobRead, status_code=status.HTTP_201_CREATED)

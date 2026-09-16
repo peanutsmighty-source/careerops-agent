@@ -256,6 +256,22 @@ task.user_goal / user_input trace
 
 面试题：为什么 Candidate Builder 不应直接写 Durable Memory？回答要点：抽取器解决的是“可能值得记住什么”的召回问题，持久化解决的是可信度、作用域、冲突、敏感信息和生命周期问题；把两者合并会让模型或规则误报直接污染长期 Context。正确设计是 proposal -> provenance validation -> evaluation -> journal -> promotion，并用 precision/recall/false-positive rate 分别度量不同失败。
 
+## 25. Graph checkpoint 为什么必须带版本
+
+假设旧 checkpoint 的下一节点叫 `human_review`，新代码把它拆成风险检查和审批两个节点。旧 JSON 仍能反序列化，但直接 resume 可能跳过新增检查。T13 因此把 Graph 版本写入 State，并在 learning graph resume 和 AgentRun recovery 前执行兼容性预检；不兼容时在模型、工具和 Node 执行前停止。
+
+版本号不是数据库 schema version。数据库迁移回答“这一行还能不能读”，Graph version 回答“这份执行状态能不能沿当前边继续跑”。新 checkpoint 分别记录 `learning-plan-v1` 和 `agent-workflow-v1`；历史 API 同时展示存储版本、Runtime 版本和兼容结果。
+
+迁移必须是显式动作，因为它可能改变下一步控制流。v1 只支持可证明的旧边界：无版本 learning checkpoint 必须正等待 `human_review`；无版本 Agent workflow 必须位于已知单一 next Node。调用者声明源版本，Runtime 核对后用 LangGraph `update_state` 写入新 checkpoint，并记录 Trace。未知版本或 Node 边界没有变换器时继续阻塞。
+
+最难的细节是 interrupt 不是普通的 `next_nodes` 字段。更新 learning State 后仅有一条通往 `human_review` 的边，还没有真正的 interrupt；迁移必须重新进入这个无副作用节点，让 `interrupt()` 再次落 checkpoint。测试同时验证恢复预检：不兼容的外层 workflow 会把 Run 标为 `needs_review`，且 AgentRunStep 仍为空，证明没有先调用模型再报错。
+
+生产系统通常维护版本注册表、逐版本变换器、迁移 dry-run、回滚和旧代码兼容窗口。当前只实现 unversioned -> v1，且不会猜测未知版本。这种保守范围比“字段差不多就继续”更适合作为可靠 Runtime 的起点。
+
+本轮复核 Memory 判断链时还发现一个边界落差：技能需求晋升 Builder 虽然只识别白名单工具，却曾允许在 working Memory 不存在时直接从成功 Step 构造 fact Candidate。现在它必须读取 working Memory 的 revision provenance，并逐项核对 policy、Run、Task、Step、ToolCall 和工具名。工具成功只证明 Observation 可用；working capture 则证明这正是经过前一阶段 Gate 保存、准备被晋升的对象。
+
+面试题：数据库能读取旧 checkpoint，为什么仍不能直接恢复？回答要点：序列化兼容只证明字段可读，不证明 Node 名、边、interrupt 位置和副作用语义兼容；恢复前必须检查 Graph version，已知版本走显式 State/控制流迁移，未知版本 fail closed，并保证检查发生在任何模型或工具执行之前。
+
 ## 24. Memory 容量、退休与物理清理
 
 假设同一个 CareerOps Task 连续完成 11 个 Run，每次结论不同。以前每个结果都可能成为 active episodic；Context 虽有 8 条/768 token 预算，数据库活跃候选却仍增长。T09 在成功 Run 的完成事务里整理：相同正文只留代表项，其他自动经历按重要性、较新 ID 排序，最多保留 8 条，超出者退休。这里 consolidation 是确定性去重，不是让模型把若干经历写成一条新事实。

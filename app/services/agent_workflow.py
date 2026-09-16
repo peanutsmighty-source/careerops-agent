@@ -15,9 +15,19 @@ from app.services.agent_loop import (
     get_agent_run,
 )
 from app.services.learning_graph import checkpoint_saver
+from app.services.checkpoint_versioning import (
+    UNVERSIONED_CHECKPOINT,
+    checkpoint_version,
+    require_checkpoint_version,
+    require_explicit_source_version,
+)
+
+
+AGENT_WORKFLOW_VERSION = "agent-workflow-v1"
 
 
 class AgentWorkflowState(TypedDict, total=False):
+    graph_version: str
     task_id: int
     run_id: int
     provider: str
@@ -129,6 +139,7 @@ def start_agent_workflow(
     graph = build_agent_workflow(model)
     graph.invoke(
         {
+            "graph_version": AGENT_WORKFLOW_VERSION,
             "task_id": task.id,
             "run_id": run.id,
             "provider": model.provider,
@@ -153,6 +164,11 @@ def resume_agent_workflow_if_interrupted(run: AgentRun, model: AgentModel) -> bo
     snapshot = graph.get_state(config)
     if not snapshot.values or not snapshot.next:
         return False
+    require_checkpoint_version(
+        dict(snapshot.values),
+        graph_name="agent workflow",
+        expected_version=AGENT_WORKFLOW_VERSION,
+    )
     graph.invoke(None, config=config)
     return True
 
@@ -167,7 +183,60 @@ def agent_workflow_checkpoint_history(run: AgentRun) -> list[dict]:
             "checkpoint_id": snapshot.config["configurable"].get("checkpoint_id"),
             "step": snapshot.metadata.get("step"),
             "next_nodes": list(snapshot.next),
+            "graph_version": checkpoint_version(dict(snapshot.values)),
+            "runtime_graph_version": AGENT_WORKFLOW_VERSION,
+            "checkpoint_compatible": (
+                checkpoint_version(dict(snapshot.values)) == AGENT_WORKFLOW_VERSION
+            ),
             "state": dict(snapshot.values),
         }
         for snapshot in snapshots
     ]
+
+
+def require_agent_workflow_checkpoint_compatible(run: AgentRun, model: AgentModel) -> None:
+    graph = build_agent_workflow(model)
+    snapshot = graph.get_state(
+        {"configurable": {"thread_id": agent_workflow_thread_id(run)}}
+    )
+    if snapshot.values and snapshot.next:
+        require_checkpoint_version(
+            dict(snapshot.values),
+            graph_name="agent workflow",
+            expected_version=AGENT_WORKFLOW_VERSION,
+        )
+
+
+def migrate_agent_workflow_checkpoint(
+    run: AgentRun, model: AgentModel, *, source_version: str
+) -> dict:
+    graph = build_agent_workflow(model)
+    config = {"configurable": {"thread_id": agent_workflow_thread_id(run)}}
+    snapshot = graph.get_state(config)
+    if not snapshot.values:
+        raise ValueError("agent workflow has no checkpoint to migrate")
+    require_explicit_source_version(dict(snapshot.values), source_version=source_version)
+    if source_version != UNVERSIONED_CHECKPOINT:
+        raise ValueError(f"no agent workflow migration exists from '{source_version}'")
+    next_nodes = list(snapshot.next)
+    predecessor = {"run_agent": "load_context", "evaluate_result": "run_agent",
+                   "complete_workflow": "evaluate_result",
+                   "block_workflow": "evaluate_result"}.get(
+                       next_nodes[0] if len(next_nodes) == 1 else ""
+                   )
+    if predecessor is None:
+        raise ValueError("agent workflow checkpoint is not at a migratable boundary")
+    graph.update_state(config, {"graph_version": AGENT_WORKFLOW_VERSION}, as_node=predecessor)
+    migrated = graph.get_state(config)
+    require_checkpoint_version(
+        dict(migrated.values), graph_name="agent workflow",
+        expected_version=AGENT_WORKFLOW_VERSION,
+    )
+    return {
+        "thread_id": agent_workflow_thread_id(run),
+        "graph_version": checkpoint_version(dict(migrated.values)),
+        "runtime_graph_version": AGENT_WORKFLOW_VERSION,
+        "checkpoint_compatible": True,
+        "next_nodes": list(migrated.next),
+        "state": dict(migrated.values),
+    }

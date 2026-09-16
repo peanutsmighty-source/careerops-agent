@@ -144,6 +144,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `POST /agent/tasks/{task_id}/traces` and `GET /agent/tasks/{task_id}/traces`: append and inspect Agent runtime trace events.
 - `POST /agent/tasks/{task_id}/run-learning-graph`: run the deterministic LangGraph skill-to-plan workflow.
 - `POST /agent/tasks/{task_id}/resume-learning-graph`: approve or reject the interrupted plan and resume the same graph thread.
+- `POST /agent/tasks/{task_id}/migrate-learning-graph-checkpoint`: explicitly migrate a supported unversioned learning checkpoint before resume.
 - `GET /agent/tasks/{task_id}/graph-checkpoints`: inspect every persisted State snapshot and next Node.
 - `GET /agent/tools`: inspect registered tool descriptions, permissions, and JSON argument schemas.
 - `GET /agent/tasks/{task_id}/tool-policy`: inspect the server-side tool policy for one task.
@@ -153,6 +154,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `POST /agent/tasks/{task_id}/agent-runs`: run the outer LangGraph workflow whose `run_agent` node invokes the framework-independent AgentLoopEngine.
 - `GET /agent/tasks/{task_id}/agent-runs`: inspect model steps, observations, and stop reasons.
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/checkpoints`: inspect the outer workflow's Node-level State history.
+- `POST /agent/tasks/{task_id}/agent-runs/{run_id}/migrate-checkpoint`: explicitly migrate a supported unversioned outer-workflow checkpoint. Incompatible recovery is stopped before model or tool execution.
 - `POST /agent/tasks/{task_id}/recover-agent-runs`: classify and recover stale AgentRuns without blindly repeating ambiguous tools.
 - `GET /agent/tasks/{task_id}/memory-context`: preview the GoalContract and selected non-expired memories; `memory_token_budget` limits the Memory portion.
 - Successful `get_skill_demand` observations are deterministically summarized into run-scoped working Memory for later model steps. A successfully completed Run promotes that verified summary to a task-scoped fact; failed or step-limited Runs retire it without promotion.

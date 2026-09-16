@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AgentMemory,
+    AgentMemoryRevision,
     AgentRun,
     AgentRunStep,
     AgentTask,
@@ -307,6 +308,29 @@ def build_skill_demand_candidate(
                 AgentMemory.status == "active",
             )
         )
+        if working is None:
+            continue
+        working_revision = session.scalar(
+            select(AgentMemoryRevision)
+            .where(AgentMemoryRevision.memory_id == working.id)
+            .order_by(AgentMemoryRevision.version.desc())
+        )
+        working_provenance = (
+            working_revision.provenance if working_revision else None
+        ) or {}
+        expected_provenance = {
+            "agent_run_id": run.id,
+            "task_id": task.id,
+            "agent_run_step_id": step.id,
+            "tool_call_id": step.tool_call_id,
+            "tool_name": "get_skill_demand",
+            "promotion_policy": "verified_skill_demand_fact_v1",
+        }
+        if any(
+            working_provenance.get(key) != value
+            for key, value in expected_provenance.items()
+        ):
+            continue
         return MemoryCandidate(
             memory_type="fact",
             scope_type="task",
@@ -324,7 +348,7 @@ def build_skill_demand_candidate(
                 "tool_call_id": step.tool_call_id,
                 "tool_name": "get_skill_demand",
                 "promotion_policy": "verified_skill_demand_fact_v1",
-                "promoted_from_working_memory_id": working.id if working else None,
+                "promoted_from_working_memory_id": working.id,
             },
         )
     return None

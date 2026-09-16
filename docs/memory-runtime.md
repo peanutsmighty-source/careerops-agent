@@ -218,6 +218,16 @@ AgentLoop 在调用模型前使用同一近似计数器拆分并记录四个输�
 
 晋升与属性变更是不同命令：working -> fact 需要新 Candidate 和 Gate；fact 内容变化走版本化 supersede；退休走 lifecycle；T09 清理走 retention。当前没有通用 Memory PATCH，也不允许模型原地修改 scope/type 来扩大可见性。
 
+## 当前判断机制：规则、模型与人工的分工
+
+CareerOps 不采用“所有判断都交给 LLM”的路线。Candidate Builder 先提出候选；Memory Gate 用确定性规则验证 scope、真实 provenance、最小信息量、敏感值、稳定键和精确重复。规则能明确证明无效时直接 reject，可信 Runtime/白名单工具来源可 accept。用户自由文本和未知来源因为需要理解语义，先进入 `needs_review`。
+
+可选 Semantic Evaluator 只处理原因恰好为 `semantic_evaluation_required` 的歧义候选。它判断长期价值、语义重复和冲突，但输出仍受结构化 schema、已知 Memory ID 集合、类型一致性和确定性规则约束。默认 AgentRun 尚未注入该 Evaluator，因此默认自由文本歧义会留在 Journal 等待 review；这不是“LLM 判断后自动人工复核”的串行流水线，而是按原因选择自动语义判断或人工处理。
+
+晋升资格也不是开放式模型判断。当前唯一自动策略 `verified_skill_demand_fact_v1` 要求成功的 `get_skill_demand` ToolCall、非空结构化结果、Run 成功终态，以及一条 active working Memory；其 revision 必须记录完全匹配的 policy、Run、Task、Step、ToolCall 和工具名。之后新 fact Candidate 仍经过 Gate，继续检查 scope、重复和稳定键，并可能产生 fact supersede。其他 working Memory 没有匹配策略时不会自动晋升。
+
+Context assembly 完全是确定性的：先按 GoalContract 和 contract/task/run scope 过滤 active、未过期 Memory，再按 importance、类型优先级和任务关键词交集排序，最后执行条数与 token 预算。当前没有 LLM reranker。Compaction 也按 observation token 预算触发，保护 GoalContract、任务约束和执行状态；T09 retention 用过期时间、精确正文重复、来源/type/scope 白名单、importance/新旧顺序和保留期决定退休与清理。
+
 ## 最小质量基线
 
 `python -m app.memory_benchmark` 在隔离的内存数据库中运行真实 Evaluator 和 Context assembler，不调用外部模型。当前标注覆盖可信 Runtime 候选、敏感值、信息不足、伪造 provenance、未知来源、需要语义复核的用户输入，以及相关、无关和过期 Memory。

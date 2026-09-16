@@ -1,6 +1,6 @@
 # CareerOps Current Handoff
 
-Updated: 2026-09-15
+Updated: 2026-09-16
 
 This file contains only volatile development state. Stable architecture is in `README.md`; priorities are in `TODO.md`; explanations are in focused `docs/` notes.
 
@@ -9,29 +9,28 @@ This file contains only volatile development state. Stable architecture is in `R
 - Workspace: `E:\tmp\careerops-agent`
 - Remote: `https://github.com/peanutsmighty-source/careerops-agent`
 - Branch: `main`
-- Latest pushed commit: `97d1683 Add deterministic memory benchmark baseline`
+- Latest pushed commit: `54927f9 Bound task memory and add retention cleanup`
 - Never print or commit `ds_key.txt` or environment API keys.
 
 ## Current Task
 
-Complete T09 deterministic consolidation, forgetting, and retired payload cleanup.
+Complete T13 Graph/checkpoint versioning and explicit migration.
 
 Implemented and verified:
 
-- Successful Runs consolidate exact Runtime episode duplicates and cap active task episodes at eight in their completion transaction.
-- Task-local expired memories retire; facts and user episodes are excluded from capacity eviction.
-- Maintenance API defaults to dry-run. Explicit purge removes old working/episodic revisions and payloads after retention, preserving identity and cleanup audit.
-- Candidate decisions remain inspectable; payload retention is an explicit exception to append-only content history.
-- Startup backfill and Candidate replay respect cleanup tombstones.
-- Business databases were not purged. No external model calls were used.
+- New learning and outer Agent workflow checkpoints persist graph versions.
+- History APIs expose stored/runtime versions and compatibility.
+- Resume and stale-Run recovery fail before Node/model/tool execution on incompatible checkpoints.
+- Explicit APIs migrate only supported unversioned checkpoints at known Node boundaries and record audit Traces.
+- Unknown versions and boundaries remain blocked.
 
-See `app/services/memory_maintenance.py` and `tests/test_memory_maintenance.py`.
+See `app/services/checkpoint_versioning.py` and `tests/test_checkpoint_versioning.py`.
 
 ## Verification
 
-- Targeted maintenance suite: 4 passed.
-- Full suite: 84 passed (80.24 seconds under coverage).
-- Coverage with branch measurement: 89%; maintenance module: 97%.
+- Targeted checkpoint/version suite: 8 passed; promotion-policy suite: 3 passed.
+- Full suite: 89 passed (70.56 seconds under coverage).
+- Coverage with branch measurement: 89%.
 - `git diff --check`: passed.
 
 Use:
@@ -42,10 +41,10 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 
 ## Review Before Completion
 
-- Cleanup retains tombstone IDs/keys so replay cannot recreate active Memory.
-- Cleanup removes Memory revision rows and selected payload columns, not all original copies in Trace/checkpoints/provenance/backups.
-- Metadata still grows. Global byte quotas, archive tiers, physical SQLite file compaction and a cleanup scheduler are unfinished.
-- T07 promotion still permits only verified skill-demand facts on successful completion; failure/max-step paths only retire working Memory.
+- A graph version describes control-flow compatibility, not database schema compatibility.
+- Only `unversioned -> v1` migration is implemented; it deliberately rejects unknown versions.
+- Learning migration re-enters only the side-effect-free human-review interrupt.
+- Agent recovery performs version preflight before inspecting or executing pending work.
 
 ## Present but Not Default-Wired
 
@@ -59,7 +58,7 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. Commit T09 and push pending commits using the user's existing push authorization; confirm actual remote status before reporting delivery.
-2. T09 is complete at the documented minimal scope. T12 is next in the backlog, but the user's RAG restriction remains in force; do not start it automatically.
+1. Finish full verification, commit T13, and push using the user's existing push authorization.
+2. T14 is the next allowed Runtime task. T12 remains deferred by the user's RAG restriction.
 
 Do not start RAG or multi-agent work yet.

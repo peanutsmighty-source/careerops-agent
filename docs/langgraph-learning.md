@@ -104,6 +104,16 @@ The business database and checkpoint database are separate:
 - `careerops.db` contains jobs, skills, Agent tasks, and audit traces.
 - `careerops_checkpoints.db` contains LangGraph execution snapshots.
 
+## Graph version and migration boundary
+
+Every new learning-plan checkpoint stores `graph_version: learning-plan-v1`; the outer Agent workflow stores `agent-workflow-v1`. History responses show the stored version, current Runtime version, and `checkpoint_compatible`. The version belongs to execution State because it must travel with every persisted snapshot, including interrupted work.
+
+Before resume or stale-Run recovery, CareerOps compares the latest resumable checkpoint with the current Graph version. A missing or different version fails before any Node, model call, or tool call. The Runtime does not assume that matching field names imply compatible control flow: a renamed Node, changed conditional edge, or changed interrupt position can make an old State unsafe even if JSON deserialization succeeds.
+
+Migration is a separate explicit API action. The first migration supports only old unversioned checkpoints at known boundaries: learning graphs waiting at `human_review`, and outer Agent workflows waiting at a recognized Node edge. The caller must state `source_version: unversioned`; CareerOps verifies the actual source version, writes the current version through `update_state`, and records an audit Trace. Unknown versions and unknown Node boundaries remain blocked because no tested transform exists.
+
+The learning migration re-enters the side-effect-free `human_review` Node to recreate a real LangGraph interrupt. This is safe here because no external write occurs before `interrupt()`. A future migration across a Node that performs effects would need a purpose-built State transform and idempotency/reconciliation rule rather than this generic step.
+
 ## Try it through the API
 
 1. Create an `AgentTask` whose success criteria require a JD-driven learning plan.

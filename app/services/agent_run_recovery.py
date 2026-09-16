@@ -15,7 +15,11 @@ from app.services.agent_loop import (
 )
 from app.services.tool_recovery import recover_tool_call
 from app.services.tool_runtime import serialize_tool_call
-from app.services.agent_workflow import resume_agent_workflow_if_interrupted
+from app.services.agent_workflow import (
+    require_agent_workflow_checkpoint_compatible,
+    resume_agent_workflow_if_interrupted,
+)
+from app.services.checkpoint_versioning import CheckpointVersionError
 
 
 TERMINAL_TOOL_STATUSES = {"succeeded", "failed", "denied"}
@@ -82,6 +86,11 @@ def _recover_run(
     try:
         model = create_agent_model(run.provider, run.model)
     except ValueError as exc:
+        return _mark_run_for_review(session, run, previous_status, str(exc))
+
+    try:
+        require_agent_workflow_checkpoint_compatible(run, model)
+    except CheckpointVersionError as exc:
         return _mark_run_for_review(session, run, previous_status, str(exc))
 
     engine = AgentLoopEngine(model)
