@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import engine
@@ -10,6 +10,7 @@ from app.models import (
     GoalContract,
     Job,
     JobRequirement,
+    RetrievalEmbeddingCacheEntry,
     Skill,
 )
 from app.services.agent_loop import AgentDecision, AgentLoopEngine, create_agent_run
@@ -181,7 +182,60 @@ def test_hybrid_retrieval_improves_semantic_recall_without_contract_leakage():
         assert hybrid.candidate_count == 2
         assert hybrid.retrieval_method == "hybrid"
         assert hybrid.embedding_usage["embedding_calls"] == 2
+        assert hybrid.embedding_usage["cache_hits"] == 1
+        assert hybrid.embedding_usage["cache_misses"] == 5
         assert hybrid.knowledge[0]["trust"] == "untrusted_public_evidence"
+        assert provider.call_count == 2
+        assert session.scalar(select(func.count(RetrievalEmbeddingCacheEntry.id))) == 5
+
+        cached = assemble_memory_context(
+            session,
+            task,
+            memory_limit=1,
+            knowledge_limit=1,
+            memory_token_budget=1200,
+            embedding_provider=provider,
+        )
+        assert cached.embedding_usage == {
+            "embedding_calls": 0,
+            "embedding_tokens": 0,
+            "cache_hits": 6,
+            "cache_misses": 0,
+        }
+        assert provider.call_count == 2
+
+        worker_memory = session.scalar(
+            select(AgentMemory).where(AgentMemory.memory_key == "worker-recovery")
+        )
+        worker_memory.content += " It supports fault-tolerant asynchronous work."
+        session.commit()
+        refreshed = assemble_memory_context(
+            session,
+            task,
+            memory_limit=1,
+            knowledge_limit=1,
+            memory_token_budget=1200,
+            embedding_provider=provider,
+        )
+        assert refreshed.embedding_usage["embedding_calls"] == 1
+        assert refreshed.embedding_usage["cache_hits"] == 5
+        assert refreshed.embedding_usage["cache_misses"] == 1
+        assert provider.call_count == 3
+
+        other_version = SemanticTestEmbeddingProvider()
+        other_version.provider_version = "semantic-test-v2"
+        version_isolated = assemble_memory_context(
+            session,
+            task,
+            memory_limit=1,
+            knowledge_limit=1,
+            memory_token_budget=1200,
+            embedding_provider=other_version,
+        )
+        assert version_isolated.embedding_usage["embedding_calls"] == 2
+        assert version_isolated.embedding_usage["cache_hits"] == 1
+        assert version_isolated.embedding_usage["cache_misses"] == 5
+        assert other_version.call_count == 2
 
         model = CapturingAnswerModel()
         run = create_agent_run(session, task=task, model=model, max_steps=1)
@@ -236,6 +290,8 @@ def test_embedding_failure_falls_back_to_lexical_retrieval():
         assert context.embedding_usage == {
             "embedding_calls": 0,
             "embedding_tokens": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
         }
         assert [item["memory_key"] for item in context.memories] == [
             "trace-evidence"

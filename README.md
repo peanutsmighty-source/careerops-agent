@@ -201,4 +201,4 @@ Read [the AgentRun recovery notes](docs/agent-run-recovery.md) for crash windows
 
 Read [the Memory Runtime notes](docs/memory-runtime.md) for the difference between durable memory, run state, and assembled model context, plus retrieval and write policies.
 
-Read [the hybrid retrieval and RAG notes](docs/rag-retrieval.md) for scope-first filtering, Memory/JD channels, embedding authorization, RRF ranking, audit, and current scaling limits.
+Read [the hybrid retrieval and RAG notes](docs/rag-retrieval.md) for scope-first filtering, Memory/JD channels, embedding authorization, persistent content-hash caching, RRF ranking, audit, and current scaling limits.

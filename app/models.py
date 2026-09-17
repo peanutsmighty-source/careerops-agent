@@ -311,6 +311,26 @@ class AgentMemory(Base):
     )
 
 
+class RetrievalEmbeddingCacheEntry(Base):
+    __tablename__ = "retrieval_embedding_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_version",
+            "content_sha256",
+            name="uq_retrieval_embedding_provider_content",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider_version: Mapped[str] = mapped_column(String(160), index=True)
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True)
+    vector: Mapped[list[float]] = mapped_column(JSON)
+    dimensions: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+
+
 class AgentMemoryRevision(Base):
     __tablename__ = "agent_memory_revisions"
     __table_args__ = (

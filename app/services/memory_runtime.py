@@ -14,6 +14,7 @@ from app.services.hybrid_retrieval import (
     rank_hybrid_documents,
 )
 from app.services.memory_similarity import MemoryEmbeddingProvider
+from app.services.retrieval_embedding_cache import CachedRetrievalEmbeddingProvider
 from app.services.token_budget import estimate_tokens
 
 
@@ -183,11 +184,16 @@ def assemble_memory_context(
         )
         for requirement in requirements
     ]
+    cached_embedding_provider = (
+        CachedRetrievalEmbeddingProvider(session.get_bind(), embedding_provider)
+        if embedding_provider
+        else None
+    )
     memory_result, knowledge_result = _rank_channels(
         query,
         memory_documents if memory_limit else [],
         knowledge_documents if knowledge_limit else [],
-        embedding_provider=embedding_provider,
+        embedding_provider=cached_embedding_provider,
         enabled=memory_token_budget > 0,
     )
     selected, knowledge, tokens_used, selected_scores = _select_under_budget(
@@ -198,14 +204,8 @@ def assemble_memory_context(
         token_budget=memory_token_budget,
     )
     embedding_usage = {
-        "embedding_calls": (
-            memory_result.usage.get("embedding_calls", 0)
-            + knowledge_result.usage.get("embedding_calls", 0)
-        ),
-        "embedding_tokens": (
-            memory_result.usage.get("embedding_tokens", 0)
-            + knowledge_result.usage.get("embedding_tokens", 0)
-        ),
+        key: memory_result.usage.get(key, 0) + knowledge_result.usage.get(key, 0)
+        for key in _zero_embedding_usage()
     }
     methods = {memory_result.method, knowledge_result.method} - {"none"}
     retrieval_method = (
@@ -334,7 +334,12 @@ def _select_under_budget(
 
 
 def _zero_embedding_usage() -> dict[str, int]:
-    return {"embedding_calls": 0, "embedding_tokens": 0}
+    return {
+        "embedding_calls": 0,
+        "embedding_tokens": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+    }
 
 
 def resolve_memory_scope(

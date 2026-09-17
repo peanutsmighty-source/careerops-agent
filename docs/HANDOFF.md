@@ -10,7 +10,7 @@ This file contains only volatile development state. Stable architecture is in `R
 - Delivery remote/upstream: `private-origin` (`https://github.com/peanutsmighty-source/careerops-agent-private.git`)
 - Public remote: `origin` (`https://github.com/peanutsmighty-source/careerops-agent.git`), currently at the T14 baseline; do not publish private changes there without explicit destination-specific authorization.
 - Branch: `main`
-- Delivery baseline: T15 is on `private-origin/main`; T16, T17, and T12 are committed locally and three commits ahead of that upstream after this handoff is finalized. Use `git log -3 --oneline` for immutable commit IDs.
+- Delivery baseline: local `HEAD` includes T16, T17, T12, and the persistent embedding-cache follow-up. Use `git status --short --branch` and `git log -4 --oneline` to verify the exact remote relation and immutable commit IDs.
 - Never print or commit `ds_key.txt` or environment API keys.
 
 ## Current Task
@@ -26,15 +26,17 @@ Implemented and verified:
 - AgentLoop stores compact retrieval metadata in model Context and full query/filter/score/provider audit in AgentRunStep plus a retrieval Trace.
 - External embeddings are disabled by default and require both provider selection and explicit data-egress acknowledgement.
 - Embedding errors fall back to lexical retrieval with an auditable failure type.
+- Embeddings are reused from a persistent `(provider_version, content_sha256)` cache; changed content and changed provider versions miss independently.
 
-See `app/services/hybrid_retrieval.py`, `app/services/memory_runtime.py`, `docs/rag-retrieval.md`, and `tests/test_hybrid_retrieval.py`.
+See `app/services/hybrid_retrieval.py`, `app/services/retrieval_embedding_cache.py`, `app/services/memory_runtime.py`, `docs/rag-retrieval.md`, and `tests/test_hybrid_retrieval.py`.
 
 ## Verification
 
 - Targeted retrieval, benchmark, token-budget, and compaction suites: passed.
-- Full suite: 105 passed (97.27 seconds under branch coverage).
-- Coverage with branch measurement: 88%; hybrid retrieval module: 92%, Memory Runtime: 87%.
+- Full suite: 105 passed (101.06 seconds under branch coverage).
+- Coverage with branch measurement: 88%; hybrid retrieval module: 92%, Memory Runtime: 87%, embedding cache: 83%.
 - Deterministic semantic benchmark: lexical recall 0.0, hybrid recall 1.0, cross-contract leakage 0.
+- Cache fixture: first retrieval 5 unique misses/2 provider batches; identical repeat 6 hits/0 provider calls; one changed document causes one miss/one provider batch.
 - T12 file diff check must exclude the unrelated trailing whitespace in `agent_run_lease.py`.
 
 Use:
@@ -45,7 +47,8 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 
 ## Review Before Completion
 
-- Embeddings are computed over eligible rows at request time; there is no persistent vector index or content-hash cache.
+- The persistent embedding cache avoids recomputation but is not an ANN index; eligible rows are still scanned and ranked in Python.
+- Obsolete cache rows do not yet have eviction or orphan cleanup.
 - JD RAG indexes structured requirement evidence rather than arbitrary raw-archive chunks.
 - RRF weights and semantic threshold are fixed; the benchmark is a small deterministic regression set, not production-quality ranking evidence.
 - The unrelated trailing-whitespace worktree edit in `agent_run_lease.py` is preserved and excluded from T12 delivery.

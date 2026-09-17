@@ -149,4 +149,9 @@ def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
 
 
 def _zero_usage() -> dict[str, int]:
-    return {"embedding_calls": 0, "embedding_tokens": 0}
+    return {
+        "embedding_calls": 0,
+        "embedding_tokens": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+    }
