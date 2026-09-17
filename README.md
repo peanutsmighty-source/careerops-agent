@@ -76,6 +76,15 @@ token quota and observations are compacted into the remaining input budget.
 Provider-reported usage is recorded after the call and kept separate from
 Memory Evaluator usage.
 
+### Local operator approval
+
+External-write approvals require a server-configured operator identity. Set
+`CAREEROPS_OPERATOR_TOKEN` to a secret Bearer token and optionally set
+`CAREEROPS_OPERATOR_ID` to the attributable operator name (the default is
+`local-operator`). Clients cannot supply or override the actor name. This is a
+single-operator development mechanism; production deployment should replace it
+with an identity provider and role-based authorization.
+
 ## Test
 
 ```powershell
@@ -119,6 +128,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `ToolCallRecord`: durable current state for one tool operation, including strategy, idempotency identity, attempts, replays, provider operation identity, reconciliation state, and result.
 - `TaskPolicy`: server-side allowlist and risk rules for tools available to one task.
 - `ToolAuthorization`: an auditable allow, deny, or approval-required decision for one ToolCall under one policy version.
+- `ToolApproval`: an authenticated, exact-operation approval with actor identity, expiry, and one-time consumption state.
 - `AgentRun`: one bounded model/tool execution with a final status, answer, and stop reason.
 - `AgentRunStep`: one persisted model action and its optional ToolCall observation.
 
@@ -151,6 +161,8 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `PUT /agent/tasks/{task_id}/tool-policy`: update the task's tool allowlist from the control plane.
 - `POST /agent/tasks/{task_id}/tool-calls`: validate, authorize, execute, and trace one tool invocation.
 - `GET /agent/tasks/{task_id}/tool-calls`: inspect durable ToolCall state and idempotency metadata.
+- `POST /agent/tasks/{task_id}/tool-calls/{tool_call_id}/approvals`: grant a short-lived one-time approval using the configured operator Bearer credential.
+- `GET /agent/tasks/{task_id}/tool-calls/{tool_call_id}/approvals`: audit approvals for one ToolCall using the same operator credential.
 - `POST /agent/tasks/{task_id}/agent-runs`: run the outer LangGraph workflow whose `run_agent` node invokes the framework-independent AgentLoopEngine. `execution_mode: "inline"` remains the default; `"worker"` returns the persisted Run while an in-process worker executes it.
 - `GET /agent/tasks/{task_id}/agent-runs`: inspect model steps, observations, and stop reasons.
 - `GET /agent/tasks/{task_id}/agent-runs/{run_id}/checkpoints`: inspect the outer workflow's Node-level State history.

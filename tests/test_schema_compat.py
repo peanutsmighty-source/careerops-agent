@@ -4,6 +4,7 @@ from app.schema_compat import (
     ensure_agent_timing_columns,
     ensure_agent_run_lease_columns,
     ensure_tool_reconciliation_columns,
+    ensure_tool_approval_columns,
     ensure_memory_candidate_columns,
     ensure_memory_revision_history,
     ensure_memory_scope_columns,
@@ -192,3 +193,25 @@ def test_tool_reconciliation_upgrade_preserves_existing_rows(tmp_path):
             "SELECT id, status, provider_operation_id, reconciliation_status, reconciled_at "
             "FROM tool_calls WHERE id = 3"
         ).one() == (3, "outcome_unknown", None, None, None)
+
+
+def test_tool_approval_upgrade_adds_attribution_to_existing_authorizations(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-tool-approval.db'}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE tool_authorizations ("
+            "id INTEGER PRIMARY KEY, tool_call_id INTEGER, decision VARCHAR(30))"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO tool_authorizations VALUES (1, 9, 'allowed')"
+        )
+    ensure_tool_approval_columns(engine)
+    ensure_tool_approval_columns(engine)
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("tool_authorizations")
+    }
+    assert {"actor_id", "approval_id"} <= columns
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT id, decision, actor_id, approval_id FROM tool_authorizations"
+        ).one() == (1, "allowed", None, None)

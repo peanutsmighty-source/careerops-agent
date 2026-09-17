@@ -108,7 +108,7 @@ ToolCall 先以 `proposed` 持久化，再转为 `authorized` 和 `executing`。
 
 尚未完成：
 
-1. 基于登录用户身份的策略管理，以及外部写操作的一次性人工审批。
+1. 用正式身份提供商和 RBAC 替换当前单操作者 Bearer credential。
 2. 接入真实外部写工具及其 provider adapter；当前仓库没有默认启用的外部写 provider，测试使用确定性 fake adapter 验证协议。
 3. 对 schema 变更使用正式数据库迁移工具。
 
@@ -144,4 +144,20 @@ external handler reports provider operation ID + timeout
 
 对账保存 `reconciliation_status` 和 `reconciled_at`，每次决定还写入新的 Trace。`attempt_count` 只在真正调用写 handler 时增加；查询 provider 状态不算写入 attempt。测试明确断言 timeout-after-success 的 write handler 只运行一次。
 
-当前最小实现的边界：没有默认启用的真实 external-write provider；没有周期性对账调度器；`not_found` 后的重试仍受 TaskPolicy 控制，而一次性人工批准由 T16 实现；SQLite 兼容升级只是开发期方案，生产数据库仍应使用正式 migration。
+当前最小实现的边界：没有默认启用的真实 external-write provider；没有周期性对账调度器；`not_found` 后的重试仍受 TaskPolicy 控制，一次性人工批准已由 T16 实现；SQLite 兼容升级只是开发期方案，生产数据库仍应使用正式 migration。
+
+## V5：可归因的一次性外部写审批
+
+外部写工具第一次进入授权时，如果 TaskPolicy 要求人工审批，ToolCall 会停在 `awaiting_approval`，handler 尚未执行，`attempt_count` 仍为 0。审批接口要求服务端配置的 Bearer credential；actor 名称也来自服务端配置，客户端不能通过请求体伪造审批人。
+
+审批不会只保存一句“用户同意了”，而是复制并绑定以下不可变作用域：
+
+```text
+task_id + tool_call_id + tool_name + idempotency_key + request_fingerprint
+```
+
+`expires_at` 限制授权窗口；`active_slot` 为同一 ToolCall 提供唯一的活动审批位置；执行前通过条件 UPDATE 同时检查作用域、未消费、未撤销和未过期，然后写入 `consumed_at` 并清空 active slot。两个并发重试即使同时读到审批，也只有一个 UPDATE 能成功。成功消费的 `approval_id` 和 `actor_id` 会进入 `ToolAuthorization` 与执行 Trace。
+
+客户端随后使用同一个 idempotency key 重放原请求。Runtime 发现 ToolCall 正在等待审批，就消费精确匹配的批准并执行第一次真实 attempt。执行完成后的普通幂等重放只读取已有结果，不会再次消费写审批，也不会再次运行 handler。另一 ToolCall、不同参数或不同 operation key 都无法借用这次批准。
+
+当前实现适合本地学习与单操作者部署：credential 来自 `CAREEROPS_OPERATOR_TOKEN`，身份来自 `CAREEROPS_OPERATOR_ID`。生产系统通常接入 OIDC/JWT、组织 RBAC、审批撤销、双人复核和更完整的安全审计。

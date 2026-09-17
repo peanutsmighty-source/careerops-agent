@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import AgentTask, ExecutionTrace, ToolCallRecord
-from app.services.authorization import authorize_tool_call
+from app.services.authorization import AuthorizationDecision, authorize_tool_call
 from app.services.tools import ToolContext, ToolDefinition, execute_tool, get_tool
 
 
@@ -92,14 +92,15 @@ def run_tool_call(
         definition=definition,
     )
     if not authorization.allowed:
-        record.status = "denied"
+        requires_approval = authorization.authorization.decision == "requires_approval"
+        record.status = "awaiting_approval" if requires_approval else "denied"
         record.error = authorization.authorization.reason
-        record.completed_at = datetime.utcnow()
+        record.completed_at = None if requires_approval else datetime.utcnow()
         trace = ExecutionTrace(
             task_id=task.id,
-            plan_step_id=plan_step_id,
+            plan_step_id=record.plan_step_id,
             event_type="tool_call",
-            status="denied",
+            status=authorization.authorization.decision,
             input_summary=f"Authorize tool {definition.name}.",
             output_summary=authorization.authorization.reason,
             metadata_json={
@@ -108,6 +109,8 @@ def run_tool_call(
                 "authorization_id": authorization.authorization.id,
                 "authorization_decision": authorization.authorization.decision,
                 "policy_version": authorization.authorization.policy_version,
+                "actor_id": authorization.authorization.actor_id,
+                "approval_id": authorization.authorization.approval_id,
                 "arguments": arguments,
             },
         )
@@ -118,7 +121,26 @@ def run_tool_call(
         session.refresh(record)
         return ToolCallOutcome(record=record, replayed=False)
 
+    _execute_authorized_record(
+        session,
+        task=task,
+        record=record,
+        definition=definition,
+        authorization=authorization,
+    )
+    return ToolCallOutcome(record=record, replayed=False)
+
+
+def _execute_authorized_record(
+    session: Session,
+    *,
+    task: AgentTask,
+    record: ToolCallRecord,
+    definition: ToolDefinition,
+    authorization: AuthorizationDecision,
+) -> ToolCallRecord:
     record.status = "authorized"
+    record.error = None
     session.commit()
     record.status = "executing"
     record.attempt_count += 1
@@ -128,7 +150,7 @@ def run_tool_call(
     execution = execute_tool(
         ToolContext(session=session, task=task),
         tool_name=definition.name,
-        arguments=arguments,
+        arguments=record.arguments_json,
         granted_permissions={definition.permission},
     )
     record.status = {
@@ -148,7 +170,7 @@ def run_tool_call(
 
     trace = ExecutionTrace(
         task_id=task.id,
-        plan_step_id=plan_step_id,
+        plan_step_id=record.plan_step_id,
         event_type="tool_call",
         status=execution.status,
         input_summary=f"Call tool {execution.tool_name}.",
@@ -170,6 +192,8 @@ def run_tool_call(
             "authorization_decision": authorization.authorization.decision,
             "authorization_reason": authorization.authorization.reason,
             "policy_version": authorization.authorization.policy_version,
+            "actor_id": authorization.authorization.actor_id,
+            "approval_id": authorization.authorization.approval_id,
             "arguments": execution.arguments,
             "output": execution.output,
             "error": execution.error,
@@ -182,7 +206,7 @@ def run_tool_call(
     record.trace_id = trace.id
     session.commit()
     session.refresh(record)
-    return ToolCallOutcome(record=record, replayed=False)
+    return record
 
 
 def list_task_tool_calls(session: Session, task_id: int) -> list[ToolCallRecord]:
@@ -201,7 +225,7 @@ def retry_persisted_tool_call(
     task: AgentTask,
     record: ToolCallRecord,
 ) -> ToolCallRecord:
-    """Retry a stale read/internal-write call whose prior DB transaction did not commit."""
+    """Retry a saved request after recovery and authorization prove it is safe."""
     definition = get_tool(record.tool_name)
     if not definition:
         raise UnknownToolError("unknown tool")
@@ -312,6 +336,8 @@ def serialize_tool_call(record: ToolCallRecord, *, replayed: bool = False) -> di
         "authorization_id": authorization.id if authorization else None,
         "authorization_decision": authorization.decision if authorization else None,
         "authorization_reason": authorization.reason if authorization else None,
+        "authorization_actor_id": authorization.actor_id if authorization else None,
+        "approval_id": authorization.approval_id if authorization else None,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "started_at": record.started_at,
@@ -367,14 +393,25 @@ def _replay_or_conflict(
     definition = get_tool(existing.tool_name)
     if not definition:
         raise UnknownToolError("unknown tool")
+    execution_pending = existing.status in {"awaiting_approval", "denied"}
     authorization = authorize_tool_call(
         session,
         task=task,
         record=existing,
         definition=definition,
+        require_execution_approval=execution_pending,
     )
     if not authorization.allowed:
         raise ToolReplayPermissionError(authorization.authorization.reason)
+    if execution_pending:
+        _execute_authorized_record(
+            session,
+            task=task,
+            record=existing,
+            definition=definition,
+            authorization=authorization,
+        )
+        return ToolCallOutcome(record=existing, replayed=False)
     existing.replay_count += 1
     session.add(
         ExecutionTrace(

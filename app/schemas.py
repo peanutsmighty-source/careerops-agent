@@ -361,6 +361,7 @@ class ToolCallRead(BaseModel):
         "succeeded",
         "failed",
         "denied",
+        "awaiting_approval",
         "outcome_unknown",
         "needs_review",
     ]
@@ -377,10 +378,34 @@ class ToolCallRead(BaseModel):
     authorization_id: int | None
     authorization_decision: Literal["allowed", "denied", "requires_approval"] | None
     authorization_reason: str | None
+    authorization_actor_id: str | None
+    approval_id: int | None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+
+
+class ToolApprovalCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expires_in_seconds: int = Field(default=300, ge=1, le=3600)
+
+
+class ToolApprovalRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    task_id: int
+    tool_call_id: int
+    actor_id: str
+    tool_name: str
+    idempotency_key: str
+    request_fingerprint: str
+    expires_at: datetime
+    consumed_at: datetime | None
+    revoked_at: datetime | None
+    created_at: datetime
 
 
 class ToolRecoveryDecisionRead(BaseModel):
@@ -393,6 +418,7 @@ class ToolRecoveryDecisionRead(BaseModel):
         "reconciled_succeeded",
         "retried_after_reconciliation",
         "reconciliation_pending",
+        "awaiting_approval",
         "needs_review",
     ]
     reason: str

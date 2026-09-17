@@ -15,6 +15,7 @@ from app.schema_compat import (
     ensure_agent_timing_columns,
     ensure_agent_run_lease_columns,
     ensure_tool_reconciliation_columns,
+    ensure_tool_approval_columns,
     ensure_memory_candidate_columns,
     ensure_memory_revision_history,
     ensure_memory_scope_columns,
@@ -35,6 +36,7 @@ from app.models import (
     MemoryCandidateRecord,
     PlanStep,
     Skill,
+    ToolCallRecord,
 )
 from app.schemas import (
     AgentAlignmentCreate,
@@ -82,6 +84,8 @@ from app.schemas import (
     TaskPolicyUpdate,
     ToolCallCreate,
     ToolCallRead,
+    ToolApprovalCreate,
+    ToolApprovalRead,
     ToolDefinitionRead,
     ToolRecoveryRunRead,
 )
@@ -117,6 +121,12 @@ from app.services.authorization import (
     update_task_policy,
 )
 from app.services.tools import list_tools
+from app.services.identity import AuthenticatedActor, authenticate_operator
+from app.services.tool_approval import (
+    ToolApprovalError,
+    create_tool_approval,
+    list_tool_approvals,
+)
 from app.services.agent_loop import (
     create_agent_model,
     create_agent_run,
@@ -156,6 +166,7 @@ def create_tables() -> None:
     ensure_agent_timing_columns(engine)
     ensure_agent_run_lease_columns(engine)
     ensure_tool_reconciliation_columns(engine)
+    ensure_tool_approval_columns(engine)
     with Session(engine) as session:
         _get_or_create_active_goal_contract(session)
     agent_run_workers.start()
@@ -667,6 +678,52 @@ def get_agent_tool_calls(
 ) -> list[dict]:
     _get_agent_task_or_404(session, task_id)
     return [serialize_tool_call(record) for record in list_task_tool_calls(session, task_id)]
+
+
+@app.post(
+    "/agent/tasks/{task_id}/tool-calls/{tool_call_id}/approvals",
+    response_model=ToolApprovalRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def approve_agent_tool_call(
+    task_id: int,
+    tool_call_id: int,
+    payload: ToolApprovalCreate,
+    actor: AuthenticatedActor = Depends(authenticate_operator),
+    session: Session = Depends(get_session),
+):
+    task = _get_agent_task_or_404(session, task_id)
+    record = session.get(ToolCallRecord, tool_call_id)
+    if not record or record.task_id != task.id:
+        raise HTTPException(status_code=404, detail="tool call not found")
+    try:
+        return create_tool_approval(
+            session,
+            task=task,
+            record=record,
+            actor=actor,
+            expires_in_seconds=payload.expires_in_seconds,
+        )
+    except ToolApprovalError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get(
+    "/agent/tasks/{task_id}/tool-calls/{tool_call_id}/approvals",
+    response_model=list[ToolApprovalRead],
+)
+def get_agent_tool_approvals(
+    task_id: int,
+    tool_call_id: int,
+    actor: AuthenticatedActor = Depends(authenticate_operator),
+    session: Session = Depends(get_session),
+):
+    del actor
+    task = _get_agent_task_or_404(session, task_id)
+    record = session.get(ToolCallRecord, tool_call_id)
+    if not record or record.task_id != task.id:
+        raise HTTPException(status_code=404, detail="tool call not found")
+    return list_tool_approvals(session, tool_call_id)
 
 
 @app.post(

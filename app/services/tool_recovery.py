@@ -212,6 +212,29 @@ def _reconcile_external_write(
             definition=definition,
         )
         if not authorization.allowed:
+            if authorization.authorization.decision == "requires_approval":
+                reason = (
+                    "The provider confirmed no operation exists, but a fresh one-time "
+                    "approval is required before retrying the external write."
+                )
+                record.status = "awaiting_approval"
+                record.error = reason
+                _add_recovery_trace(
+                    session,
+                    record,
+                    status="awaiting_approval",
+                    output_summary=reason,
+                    previous_status=previous_status,
+                    reconciliation_status=result.status,
+                )
+                session.commit()
+                return RecoveryDecision(
+                    tool_call_id=record.id,
+                    previous_status=previous_status,
+                    status=record.status,
+                    action="awaiting_approval",
+                    reason=reason,
+                )
             return _mark_for_review(
                 session,
                 record,

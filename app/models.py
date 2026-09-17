@@ -109,6 +109,7 @@ class ToolCallStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     DENIED = "denied"
+    AWAITING_APPROVAL = "awaiting_approval"
     OUTCOME_UNKNOWN = "outcome_unknown"
     NEEDS_REVIEW = "needs_review"
 
@@ -518,6 +519,11 @@ class ToolCallRecord(Base):
         cascade="all, delete-orphan",
         order_by="ToolAuthorization.id",
     )
+    approvals: Mapped[list[ToolApproval]] = relationship(
+        back_populates="tool_call",
+        cascade="all, delete-orphan",
+        order_by="ToolApproval.id",
+    )
 
 
 class TaskPolicy(Base):
@@ -550,10 +556,41 @@ class ToolAuthorization(Base):
     decision: Mapped[str] = mapped_column(String(30), index=True)
     reason: Mapped[str] = mapped_column(Text)
     policy_snapshot: Mapped[dict] = mapped_column(JSON)
+    actor_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    approval_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tool_approvals.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     task: Mapped[AgentTask] = relationship(back_populates="tool_authorizations")
     tool_call: Mapped[ToolCallRecord] = relationship(back_populates="authorizations")
+    approval: Mapped[ToolApproval | None] = relationship(back_populates="authorizations")
+
+
+class ToolApproval(Base):
+    __tablename__ = "tool_approvals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("agent_tasks.id"), index=True)
+    tool_call_id: Mapped[int] = mapped_column(ForeignKey("tool_calls.id"), index=True)
+    active_slot: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
+    actor_id: Mapped[str] = mapped_column(String(160), index=True)
+    tool_name: Mapped[str] = mapped_column(String(100))
+    idempotency_key: Mapped[str] = mapped_column(String(240))
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    tool_call: Mapped[ToolCallRecord] = relationship(back_populates="approvals")
+    authorizations: Mapped[list[ToolAuthorization]] = relationship(
+        back_populates="approval", order_by="ToolAuthorization.id"
+    )
 
 
 class AgentRun(Base):

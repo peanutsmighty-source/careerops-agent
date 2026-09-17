@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import AgentTask, TaskPolicy, ToolAuthorization, ToolCallRecord
+from app.services.tool_approval import consume_matching_tool_approval
 from app.services.tools import ToolDefinition, get_tool, list_tools
 
 
@@ -58,14 +59,28 @@ def authorize_tool_call(
     task: AgentTask,
     record: ToolCallRecord,
     definition: ToolDefinition,
+    require_execution_approval: bool = True,
 ) -> AuthorizationDecision:
     policy = get_or_create_task_policy(session, task)
+    approval = None
     if definition.name not in policy.allowed_tools:
         decision = "denied"
         reason = f"Tool '{definition.name}' is not allowed by TaskPolicy v{policy.version}."
-    elif definition.effect == "external_write" and policy.external_writes_require_approval:
-        decision = "requires_approval"
-        reason = f"External-write tool '{definition.name}' requires explicit human approval."
+    elif (
+        definition.effect == "external_write"
+        and policy.external_writes_require_approval
+        and require_execution_approval
+    ):
+        approval = consume_matching_tool_approval(session, record=record)
+        if approval:
+            decision = "allowed"
+            reason = (
+                f"One-time approval {approval.id} from actor {approval.actor_id} "
+                "authorizes this exact external operation."
+            )
+        else:
+            decision = "requires_approval"
+            reason = f"External-write tool '{definition.name}' requires explicit human approval."
     else:
         decision = "allowed"
         reason = f"TaskPolicy v{policy.version} allows tool '{definition.name}'."
@@ -80,9 +95,12 @@ def authorize_tool_call(
         effect=definition.effect,
         decision=decision,
         reason=reason,
+        actor_id=approval.actor_id if approval else None,
+        approval_id=approval.id if approval else None,
         policy_snapshot={
             "allowed_tools": policy.allowed_tools,
             "external_writes_require_approval": policy.external_writes_require_approval,
+            "require_execution_approval": require_execution_approval,
         },
     )
     session.add(authorization)

@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 15 complete and 3 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **18 capabilities**: 16 complete and 2 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -87,7 +87,7 @@ Tracked count: **18 capabilities**: 15 complete and 3 open. Sources: 8 `user-dir
   - Query operation status by provider operation ID before retrying an unknown outcome.
   - Acceptance: timeout-after-success does not duplicate an external side effect.
 
-- [ ] **T16 Add authenticated identity and one-time external-write approval** (`user-direct`)
+- [x] **T16 Add authenticated identity and one-time external-write approval** (`user-direct`)
   - Acceptance: approval is attributable, scoped, expiring, and cannot be reused for another operation.
 
 - [ ] **T17 Add historical before-state replay or event sourcing** (`user-direct`)

@@ -276,3 +276,34 @@ def ensure_tool_reconciliation_columns(engine: Engine) -> None:
             "CREATE INDEX IF NOT EXISTS ix_tool_calls_provider_operation_id "
             "ON tool_calls (provider_operation_id)"
         ))
+
+
+def ensure_tool_approval_columns(engine: Engine) -> None:
+    """Add approval attribution fields to existing development authorization tables."""
+    inspector = inspect(engine)
+    if not inspector.has_table("tool_authorizations"):
+        return
+    columns = {
+        column["name"] for column in inspector.get_columns("tool_authorizations")
+    }
+    missing = {"actor_id", "approval_id"} - columns
+    if missing and engine.dialect.name != "sqlite":
+        raise RuntimeError("tool_authorizations requires a database migration for approvals")
+    if engine.dialect.name != "sqlite":
+        return
+    statements = {
+        "actor_id": "ALTER TABLE tool_authorizations ADD COLUMN actor_id VARCHAR(160)",
+        "approval_id": "ALTER TABLE tool_authorizations ADD COLUMN approval_id INTEGER",
+    }
+    with engine.begin() as connection:
+        for column in ("actor_id", "approval_id"):
+            if column in missing:
+                connection.execute(text(statements[column]))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_tool_authorizations_actor_id "
+            "ON tool_authorizations (actor_id)"
+        ))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_tool_authorizations_approval_id "
+            "ON tool_authorizations (approval_id)"
+        ))
