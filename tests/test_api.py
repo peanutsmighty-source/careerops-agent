@@ -1,9 +1,13 @@
 from datetime import datetime, timedelta
+from pathlib import Path
 
+import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.database import engine
 from app.debug_cli import (
+    DebugCliError,
     create_snapshot,
     replay_call,
     run_isolated_scenario,
@@ -2151,19 +2155,50 @@ def test_debug_cli_inspects_snapshots_and_replays_without_changing_source(client
         tmp_path / "tool-call.db",
     )
     replayed = replay_call("sqlite:///./test_careerops.db", call["tool_call_id"])
+    replayed_from_before_state = replay_call(
+        "sqlite:///./test_careerops.db",
+        call["tool_call_id"],
+        before_attempt=1,
+    )
 
     assert inspected["tool_call"]["arguments"] == arguments
     assert len(inspected["traces"]) == 1
+    assert len(inspected["before_state_fixtures"]) == 1
+    fixture = inspected["before_state_fixtures"][0]
+    assert fixture["attempt_number"] == 1
+    assert len(fixture["database_sha256"]) == 64
+    fixture_path = Path(fixture["database_path"])
+    assert fixture_path.is_file()
+    fixture_engine = create_engine(f"sqlite:///{fixture_path.as_posix()}")
+    try:
+        with Session(fixture_engine) as session:
+            before_step = session.get(PlanStep, step["id"])
+            assert before_step.status == "pending"
+            assert before_step.result_summary is None
+    finally:
+        fixture_engine.dispose()
     assert (tmp_path / "tool-call.db").is_file()
     assert (tmp_path / "tool-call.json").is_file()
     assert len(snapshot["database_sha256"]) == 64
     assert replayed.database_isolated is True
     assert replayed.replay_status == "success"
     assert replayed.output_matches is True
+    assert replayed_from_before_state.before_state_attempt == 1
+    assert replayed_from_before_state.status_matches is True
+    assert replayed_from_before_state.output_matches is True
+    assert replayed_from_before_state.error_matches is True
     with Session(engine) as session:
         source_step = session.get(PlanStep, step["id"])
         assert source_step.status == "blocked"
         assert source_step.result_summary == "Changed after the recorded call."
+
+    fixture_path.write_bytes(fixture_path.read_bytes() + b"tampered")
+    with pytest.raises(DebugCliError, match="checksum does not match"):
+        replay_call(
+            "sqlite:///./test_careerops.db",
+            call["tool_call_id"],
+            before_attempt=1,
+        )
 
 
 def test_scenario_runner_uses_isolated_database_and_checkpoint_process():

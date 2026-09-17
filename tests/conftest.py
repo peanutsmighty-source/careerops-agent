@@ -4,6 +4,7 @@ import os
 
 os.environ["CAREEROPS_DATABASE_URL"] = "sqlite:///./test_careerops.db"
 os.environ["CAREEROPS_CHECKPOINT_DB"] = "test_careerops_checkpoints.db"
+os.environ["CAREEROPS_REPLAY_FIXTURE_DIR"] = ".test-tmp/replay-fixtures"
 
 import pytest
 from fastapi.testclient import TestClient

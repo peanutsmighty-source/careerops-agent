@@ -40,6 +40,14 @@ python -m app.debug_cli replay 3
 python -m app.debug_cli replay 3 --snapshot .debug\tool-call-3.db
 ```
 
+对 `internal_write`，Runtime 会在每次真正执行前自动保存 SQLite before-state。可以选择某次 attempt 的执行前状态复现：
+
+```powershell
+python -m app.debug_cli replay 3 --before-attempt 1
+```
+
+`show 3` 会列出可用 fixture 的 attempt、路径和 SHA-256。回放前会校验摘要；fixture 缺失或被修改时明确失败，不会悄悄退回当前数据库。
+
 安装项目后，以上命令也可以写成 `careerops-debug ...`。
 
 ## 重放完整场景
@@ -92,18 +100,24 @@ ingestion:               91%
 以 `update_plan_step` 为例：
 
 1. 从真实数据库读取 ToolCall #3 保存的工具名、参数和原始结果。
-2. 使用 SQLite backup API 创建一致的临时数据库副本。
+2. 普通 replay 使用 SQLite backup API 创建当前状态的一致副本；`--before-attempt` 则选择 Runtime 在该次内部写入前保存的历史副本。
 3. 在副本里找到同一个 AgentTask 和 PlanStep。
 4. 读取副本中的任务策略和历史授权，构造受控执行上下文后重新调用工具。
-5. 比较原始与重放的 status、output 和 error。
-6. 回滚副本事务并删除临时目录。
+5. 历史状态提供执行输入，真实 ToolCall 的最终记录提供期望 status、output 和 error；两者不能混用，因为 before-state 里的 ToolCall 仍处于 `executing`。
+6. 即使输入已经是手工 snapshot 或 before-state fixture，也会再复制到临时数据库执行，随后删除临时目录；原数据库和历史 fixture 都不会被回放修改。
 
 真实 `careerops.db` 不会成为重放执行目标。`external_write` 工具也会被拒绝，因为数据库副本隔离不了 GitHub、邮件或云服务上的副作用。
 
+## Before-state 如何产生
+
+Tool Runtime 把 ToolCall 标记为 `executing`、递增 attempt 并提交后，在调用 `internal_write` handler 之前用 SQLite online backup 保存整个一致状态。随后把路径、attempt 和 SHA-256 记录到 `ToolReplayFixture`。如果进程在 handler 中断，fixture 仍指向这次尝试真正看到的前置业务状态；重试会产生新的 attempt fixture。
+
+这是面向开发环境的最小实现，不是完整事件溯源。生产系统常用数据库 point-in-time recovery、不可变事件日志或按工具定义的小型 fixture，避免每次写入复制整个数据库。
+
 ## 当前限制
 
-- 快照是“当前数据库状态”，不是 ToolCall 执行前的历史状态。失败调用通常没有提交业务写入，因此已经足够复现；对成功写入的精确历史复现，之后需要 before-state fixture 或事件溯源。
-- 快照包含完整开发数据库，可能含个人数据，不应直接上传到 Issue 或公开仓库。
+- before-state 目前只为文件型 SQLite 的 `internal_write` 自动生成；只读工具无需历史写前状态，外部写入不能靠数据库副本安全复现。
+- fixture 是整库副本，可能含个人数据且会随写入次数增长，不应上传到 Issue 或公开仓库。当前尚未实现 retention/容量配额。
 - 当前快照与 replay 只支持开发环境的文件型 SQLite；未来切换 PostgreSQL 后需要独立的测试库/事务沙箱。
 - Replay 只能复现确定性工具层问题。模型为什么选择某个工具，还需要保存模型输入、输出、模型版本和采样参数后才能复现。
 

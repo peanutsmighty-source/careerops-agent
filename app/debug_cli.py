@@ -17,7 +17,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session
 
-from app.models import AgentTask, ExecutionTrace, ToolCallRecord
+from app.models import AgentTask, ExecutionTrace, ToolCallRecord, ToolReplayFixture
 from app.scenario_runner import scenario_catalog
 from app.services.tool_runtime import serialize_tool_call
 from app.services.tools import ToolContext, execute_tool, get_tool
@@ -42,6 +42,14 @@ class ReplayResult:
     replay_output: dict | None
     replay_error: str | None
     database_isolated: bool = True
+    before_state_attempt: int | None = None
+
+
+@dataclass(frozen=True)
+class _ReplayExpectation:
+    source_status: str
+    output: dict | None
+    error: str | None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,6 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Replay from an existing snapshot instead of a temporary current-state copy.",
     )
+    replay.add_argument(
+        "--before-attempt",
+        type=int,
+        help="Replay from the captured database state immediately before this attempt.",
+    )
 
     subparsers.add_parser("scenarios", help="List isolated cross-module scenarios.")
     scenario = subparsers.add_parser(
@@ -104,6 +117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         args.database_url,
                         args.tool_call_id,
                         snapshot_path=args.snapshot,
+                        before_attempt=args.before_attempt,
                     )
                 )
             )
@@ -194,6 +208,9 @@ def show_call(database_url: str, tool_call_id: int) -> dict:
                 else None,
                 "tool_call": serialize_tool_call(record),
                 "traces": [_trace_data(trace) for trace in traces],
+                "before_state_fixtures": [
+                    _fixture_data(fixture) for fixture in record.replay_fixtures
+                ],
             }
     finally:
         engine.dispose()
@@ -242,7 +259,43 @@ def replay_call(
     tool_call_id: int,
     *,
     snapshot_path: Path | None = None,
+    before_attempt: int | None = None,
 ) -> ReplayResult:
+    if snapshot_path and before_attempt is not None:
+        raise DebugCliError("--snapshot and --before-attempt cannot be used together")
+    if before_attempt is not None:
+        if before_attempt < 1:
+            raise DebugCliError("--before-attempt must be at least 1")
+        source_engine = create_engine(database_url)
+        try:
+            _require_sqlite(source_engine)
+            with Session(source_engine) as session:
+                source_record = _get_call(session, tool_call_id)
+                fixture = session.scalar(
+                    select(ToolReplayFixture).where(
+                        ToolReplayFixture.tool_call_id == tool_call_id,
+                        ToolReplayFixture.attempt_number == before_attempt,
+                    )
+                )
+                if not fixture:
+                    raise DebugCliError(
+                        f"before-state fixture for tool call {tool_call_id} "
+                        f"attempt {before_attempt} was not found"
+                    )
+                fixture_path = Path(fixture.database_path)
+                if not fixture_path.is_file():
+                    raise DebugCliError(f"before-state fixture is missing: {fixture_path}")
+                if _sha256_file(fixture_path) != fixture.database_sha256:
+                    raise DebugCliError("before-state fixture checksum does not match")
+                expectation = _replay_expectation(source_record)
+            return _replay_from_database(
+                fixture_path,
+                tool_call_id,
+                before_state_attempt=before_attempt,
+                expectation=expectation,
+            )
+        finally:
+            source_engine.dispose()
     if snapshot_path:
         snapshot = snapshot_path.resolve()
         if not snapshot.is_file():
@@ -260,7 +313,35 @@ def replay_call(
         source_engine.dispose()
 
 
-def _replay_from_database(database_path: Path, tool_call_id: int) -> ReplayResult:
+def _replay_from_database(
+    database_path: Path,
+    tool_call_id: int,
+    *,
+    before_state_attempt: int | None = None,
+    expectation: _ReplayExpectation | None = None,
+) -> ReplayResult:
+    source_engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    try:
+        with tempfile.TemporaryDirectory(prefix="careerops-replay-state-") as directory:
+            replay_path = Path(directory) / "replay.db"
+            _backup_sqlite(source_engine, replay_path)
+            return _execute_replay_database(
+                replay_path,
+                tool_call_id,
+                before_state_attempt=before_state_attempt,
+                expectation=expectation,
+            )
+    finally:
+        source_engine.dispose()
+
+
+def _execute_replay_database(
+    database_path: Path,
+    tool_call_id: int,
+    *,
+    before_state_attempt: int | None = None,
+    expectation: _ReplayExpectation | None = None,
+) -> ReplayResult:
     engine = create_engine(f"sqlite:///{database_path.as_posix()}")
     try:
         with Session(engine) as session:
@@ -284,24 +365,34 @@ def _replay_from_database(database_path: Path, tool_call_id: int) -> ReplayResul
                 granted_permissions=granted_permissions,
             )
             session.rollback()
-            source_status = {
-                "succeeded": "success",
-                "failed": "error",
-                "denied": "denied",
-            }.get(record.status, record.status)
+            expected = expectation or _replay_expectation(record)
             return ReplayResult(
                 tool_call_id=record.id,
                 tool_name=record.tool_name,
-                source_status=source_status,
+                source_status=expected.source_status,
                 replay_status=execution.status,
-                status_matches=source_status == execution.status,
-                output_matches=record.output_json == execution.output,
-                error_matches=record.error == execution.error,
+                status_matches=expected.source_status == execution.status,
+                output_matches=expected.output == execution.output,
+                error_matches=expected.error == execution.error,
                 replay_output=execution.output,
                 replay_error=execution.error,
+                before_state_attempt=before_state_attempt,
             )
     finally:
         engine.dispose()
+
+
+def _replay_expectation(record: ToolCallRecord) -> _ReplayExpectation:
+    source_status = {
+        "succeeded": "success",
+        "failed": "error",
+        "denied": "denied",
+    }.get(record.status, record.status)
+    return _ReplayExpectation(
+        source_status=source_status,
+        output=record.output_json,
+        error=record.error,
+    )
 
 
 def _recorded_permissions(session: Session, record: ToolCallRecord) -> set[str]:
@@ -347,6 +438,17 @@ def _trace_data(trace: ExecutionTrace) -> dict:
         "output_summary": trace.output_summary,
         "metadata": trace.metadata_json,
         "created_at": trace.created_at,
+    }
+
+
+def _fixture_data(fixture: ToolReplayFixture) -> dict:
+    return {
+        "id": fixture.id,
+        "attempt_number": fixture.attempt_number,
+        "storage_format": fixture.storage_format,
+        "database_path": fixture.database_path,
+        "database_sha256": fixture.database_sha256,
+        "created_at": fixture.created_at,
     }
 
 

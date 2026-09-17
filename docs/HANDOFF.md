@@ -1,6 +1,6 @@
 # CareerOps Current Handoff
 
-Updated: 2026-09-16
+Updated: 2026-09-17
 
 This file contains only volatile development state. Stable architecture is in `README.md`; priorities are in `TODO.md`; explanations are in focused `docs/` notes.
 
@@ -10,30 +10,30 @@ This file contains only volatile development state. Stable architecture is in `R
 - Delivery remote/upstream: `private-origin` (`https://github.com/peanutsmighty-source/careerops-agent-private.git`)
 - Public remote: `origin` (`https://github.com/peanutsmighty-source/careerops-agent.git`), currently at the T14 baseline; do not publish private changes there without explicit destination-specific authorization.
 - Branch: `main`
-- Delivery baseline: T15 is on `private-origin/main`; T16 is committed locally and one commit ahead of that upstream. Use `git log -1 --oneline` for the current immutable commit ID.
+- Delivery baseline: T15 is on `private-origin/main`; T16 and T17 are committed locally and two commits ahead of that upstream after this handoff is finalized. Use `git log -2 --oneline` for immutable commit IDs.
 - Never print or commit `ds_key.txt` or environment API keys.
 
 ## Current Task
 
-Complete T16 authenticated identity and one-time external-write approval.
+Complete T17 historical before-state replay for development SQLite.
 
 Implemented and verified:
 
-- External writes pause at `awaiting_approval` without executing the handler.
-- Approval endpoints require a server-configured Bearer credential; actor identity is not client supplied.
-- Approval scope binds task, ToolCall, tool, operation key, and request fingerprint.
-- Expired approvals cannot execute; expired slots can be replaced without rewriting history.
-- Atomic one-time consumption prevents concurrent or cross-operation reuse.
-- Consuming actor and approval IDs are persisted in ToolAuthorization and execution Trace.
+- Every file-backed SQLite `internal_write` attempt captures an online-backup fixture immediately before the handler runs.
+- `ToolReplayFixture` binds the fixture path and SHA-256 to an exact ToolCall attempt.
+- `careerops-debug replay <id> --before-attempt <n>` selects an exact pre-call state and fails on missing or modified fixtures.
+- Historical state supplies replay inputs while the durable final ToolCall supplies the expected outcome.
+- Replays execute on a second temporary copy, preserving both the live database and the historical fixture.
+- External writes remain non-replayable and must use reconciliation.
 
-See `app/services/identity.py`, `app/services/tool_approval.py`, and `tests/test_tool_approval.py`.
+See `app/services/replay_fixture.py`, `app/debug_cli.py`, and the debug CLI test in `tests/test_api.py`.
 
 ## Verification
 
-- Targeted approval, reconciliation, and compatibility suites: 13 passed.
-- Full suite: 102 passed (95.01 seconds under branch coverage).
-- Coverage with branch measurement: 88%; approval module: 84%, identity: 91%, Tool Runtime: 92%.
-- T16 file diff check: passed. The unrelated trailing whitespace in `agent_run_lease.py` remains intentionally untouched.
+- Targeted replay, internal-write recovery, and reconciliation suites: 5 passed.
+- Full suite: 102 passed (95.23 seconds under branch coverage).
+- Coverage with branch measurement: 88%; replay fixture module: 92%, Tool Runtime: 92%.
+- T17 file diff check must exclude the unrelated trailing whitespace in `agent_run_lease.py`.
 
 Use:
 
@@ -43,10 +43,10 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 
 ## Review Before Completion
 
-- The Bearer credential is a minimal single-operator identity mechanism, not production OIDC/RBAC.
-- There is no default real external-write provider; tests use fake handlers to prove approval semantics.
-- Approval consumption is intentionally separate from result replay: replaying a completed call does not spend another write approval.
-- The unrelated trailing-whitespace worktree edit in `agent_run_lease.py` is preserved and excluded from T16 delivery.
+- The implementation copies the whole SQLite database per internal-write attempt; fixture retention and byte quotas are not implemented.
+- PostgreSQL needs PITR, event sourcing, or tool-specific fixtures rather than this SQLite mechanism.
+- Fixture files can contain sensitive development data and must remain local.
+- The unrelated trailing-whitespace worktree edit in `agent_run_lease.py` is preserved and excluded from T17 delivery.
 
 ## Present but Not Default-Wired
 
@@ -60,7 +60,7 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. T17 historical before-state replay or event sourcing is next.
-2. T12 remains deferred by the user's RAG restriction; do not begin RAG or multi-agent work early.
+1. T12 is the only open tracked capability, but remains deferred by the user's RAG restriction.
+2. Do not invent another major capability or begin RAG/multi-agent work without user direction.
 
 Do not start RAG or multi-agent work yet.

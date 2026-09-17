@@ -14,5 +14,6 @@ test_careerops_checkpoints.db
 .coverage
 htmlcov/
 .debug/
+.careerops-replay/
 hw_decoded_defanged.txt
 ds_key.txt

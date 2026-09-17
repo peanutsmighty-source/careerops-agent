@@ -102,6 +102,7 @@ The Memory benchmark prints labeled Candidate precision/recall, exact decision a
 python -m app.debug_cli calls --limit 10
 python -m app.debug_cli show 3
 python -m app.debug_cli replay 3
+python -m app.debug_cli replay 3 --before-attempt 1
 python -m app.debug_cli scenarios
 python -m app.debug_cli scenario graph-no-skills
 ```
@@ -129,6 +130,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `TaskPolicy`: server-side allowlist and risk rules for tools available to one task.
 - `ToolAuthorization`: an auditable allow, deny, or approval-required decision for one ToolCall under one policy version.
 - `ToolApproval`: an authenticated, exact-operation approval with actor identity, expiry, and one-time consumption state.
+- `ToolReplayFixture`: a checksummed SQLite before-state for one internal-write attempt, used only through isolated replay copies.
 - `AgentRun`: one bounded model/tool execution with a final status, answer, and stop reason.
 - `AgentRunStep`: one persisted model action and its optional ToolCall observation.
 

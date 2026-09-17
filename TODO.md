@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 16 complete and 2 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **18 capabilities**: 17 complete and 1 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -90,8 +90,9 @@ Tracked count: **18 capabilities**: 16 complete and 2 open. Sources: 8 `user-dir
 - [x] **T16 Add authenticated identity and one-time external-write approval** (`user-direct`)
   - Acceptance: approval is attributable, scoped, expiring, and cannot be reused for another operation.
 
-- [ ] **T17 Add historical before-state replay or event sourcing** (`user-direct`)
+- [x] **T17 Add historical before-state replay or event sourcing** (`user-direct`)
   - Acceptance: CLI reproduction can recreate a chosen pre-call state, not only copy the current database.
+  - Minimal implementation: each file-backed SQLite `internal_write` attempt captures a checksummed whole-database before-state; the CLI selects an exact attempt and replays a second isolated copy. PostgreSQL PITR/event sourcing and fixture retention remain future production work.
 
 ## Recommended sequence
 

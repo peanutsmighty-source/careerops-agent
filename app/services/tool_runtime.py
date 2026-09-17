@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models import AgentTask, ExecutionTrace, ToolCallRecord
 from app.services.authorization import AuthorizationDecision, authorize_tool_call
+from app.services.replay_fixture import capture_tool_before_state
 from app.services.tools import ToolContext, ToolDefinition, execute_tool, get_tool
 
 
@@ -146,6 +147,7 @@ def _execute_authorized_record(
     record.attempt_count += 1
     record.started_at = datetime.utcnow()
     session.commit()
+    before_state = capture_tool_before_state(session, record=record)
 
     execution = execute_tool(
         ToolContext(session=session, task=task),
@@ -194,6 +196,10 @@ def _execute_authorized_record(
             "policy_version": authorization.authorization.policy_version,
             "actor_id": authorization.authorization.actor_id,
             "approval_id": authorization.authorization.approval_id,
+            "before_state_fixture_id": before_state.id if before_state else None,
+            "before_state_attempt": (
+                before_state.attempt_number if before_state else None
+            ),
             "arguments": execution.arguments,
             "output": execution.output,
             "error": execution.error,
@@ -237,6 +243,7 @@ def retry_persisted_tool_call(
     record.completed_at = None
     record.error = None
     session.commit()
+    before_state = capture_tool_before_state(session, record=record)
 
     execution = execute_tool(
         ToolContext(session=session, task=task),
@@ -282,6 +289,10 @@ def retry_persisted_tool_call(
             "provider_operation_id": execution.provider_operation_id,
             "reconciled_provider_operation_id": reconciled_provider_operation_id,
             "reconciliation_status": record.reconciliation_status,
+            "before_state_fixture_id": before_state.id if before_state else None,
+            "before_state_attempt": (
+                before_state.attempt_number if before_state else None
+            ),
         },
     )
     session.add(trace)

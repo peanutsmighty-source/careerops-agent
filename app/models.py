@@ -524,6 +524,11 @@ class ToolCallRecord(Base):
         cascade="all, delete-orphan",
         order_by="ToolApproval.id",
     )
+    replay_fixtures: Mapped[list[ToolReplayFixture]] = relationship(
+        back_populates="tool_call",
+        cascade="all, delete-orphan",
+        order_by="ToolReplayFixture.attempt_number",
+    )
 
 
 class TaskPolicy(Base):
@@ -591,6 +596,26 @@ class ToolApproval(Base):
     authorizations: Mapped[list[ToolAuthorization]] = relationship(
         back_populates="approval", order_by="ToolAuthorization.id"
     )
+
+
+class ToolReplayFixture(Base):
+    __tablename__ = "tool_replay_fixtures"
+    __table_args__ = (
+        UniqueConstraint(
+            "tool_call_id", "attempt_number", name="uq_tool_replay_fixture_attempt"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("agent_tasks.id"), index=True)
+    tool_call_id: Mapped[int] = mapped_column(ForeignKey("tool_calls.id"), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    storage_format: Mapped[str] = mapped_column(String(40), default="sqlite-backup-v1")
+    database_path: Mapped[str] = mapped_column(Text)
+    database_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    tool_call: Mapped[ToolCallRecord] = relationship(back_populates="replay_fixtures")
 
 
 class AgentRun(Base):
