@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 17 complete and 1 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **18 capabilities**: 18 complete and 0 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -51,9 +51,10 @@ Tracked count: **18 capabilities**: 17 complete and 1 open. Sources: 8 `user-dir
   - Track prompt, memory, evaluator, and compaction token usage separately.
   - Acceptance: context assembly stays below a configured model budget.
 
-- [ ] **T12 Add embedding/hybrid retrieval and RAG** (`roadmap`)
+- [x] **T12 Add embedding/hybrid retrieval and RAG** (`roadmap`)
   - Preserve scope, lifecycle, evidence, and deterministic filters around vector retrieval.
   - Acceptance: retrieval improves relevant Memory/JD recall without leaking across contracts.
+  - Minimal implementation: scope-first Memory and public JD channels, lexical/optional embedding RRF, shared token budget, provenance, retrieval Trace, safe fallback, and deterministic recall/leakage benchmarks. Persistent vector indexing and model reranking remain future production work.
 
 - [x] **T03 Add free-text Candidate Builder** (`roadmap`)
   - Extract explicit user facts, preferences, corrections, and reusable episodes with structured output.

@@ -400,14 +400,16 @@ def test_memory_context_filters_expired_memory_and_respects_budget(client):
     assert context["goal_contract"]["id"] == task["goal_contract_id"]
     assert [memory["memory_key"] for memory in context["memories"]] == ["target-role"]
     assert 0 < context["retrieval"]["tokens_used"] <= 80
-    assert context["retrieval"] == {
-        "candidate_count": 2,
-        "selected_count": 1,
-        "excluded_expired_count": 1,
-        "token_budget": 80,
-        "tokens_used": context["retrieval"]["tokens_used"],
-        "token_estimator": "langchain_count_tokens_approximately_v1",
-    }
+    assert context["retrieval"]["candidate_count"] == 2
+    assert context["retrieval"]["selected_count"] == 1
+    assert context["retrieval"]["excluded_expired_count"] == 1
+    assert context["retrieval"]["knowledge_candidate_count"] == 0
+    assert context["retrieval"]["knowledge_selected_count"] == 0
+    assert context["retrieval"]["token_budget"] == 80
+    assert context["retrieval"]["method"] == "lexical"
+    assert context["retrieval"]["token_estimator"] == (
+        "langchain_count_tokens_approximately_v1"
+    )
 
     empty = client.get(
         f"/agent/tasks/{task['id']}/memory-context?memory_token_budget=0"

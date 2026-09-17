@@ -11,6 +11,7 @@ from app.database import Base
 from app.models import AgentMemory, AgentRun, AgentTask, ExecutionTrace, GoalContract
 from app.services.memory_evaluator import MemoryCandidate, evaluate_and_store_candidate
 from app.services.memory_runtime import assemble_memory_context
+from app.services.memory_similarity import EmbeddingBatch
 from app.services.memory_versioning import record_initial_memory_version
 from app.services.context_compaction import compact_agent_context
 from app.services.free_text_candidate_builder import extract_free_text_candidate_proposals
@@ -34,6 +35,9 @@ class MemoryBenchmarkReport:
     extraction_recall: float
     extraction_false_positive_rate: float
     retrieval_recall: float
+    lexical_semantic_retrieval_recall: float
+    hybrid_semantic_retrieval_recall: float
+    retrieval_scope_leakage_count: int
     pre_compaction_critical_constraint_retention: float
     post_compaction_critical_constraint_retention: float
     candidate_cases: tuple[CandidateCaseResult, ...]
@@ -258,6 +262,7 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
             critical_key in compacted_keys
             and compacted.compacted_context["task"]["constraints"] == task.constraints
         )
+        semantic_metrics = _semantic_retrieval_metrics(session, contract)
 
     expected_positive = [case.expected_decision == "accept" for case in results]
     actual_positive = [case.actual_decision == "accept" for case in results]
@@ -284,12 +289,115 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
         extraction_recall=extraction["recall"],
         extraction_false_positive_rate=extraction["false_positive_rate"],
         retrieval_recall=_ratio(len(relevant_keys & retrieved_keys), len(relevant_keys)),
+        lexical_semantic_retrieval_recall=semantic_metrics["lexical_recall"],
+        hybrid_semantic_retrieval_recall=semantic_metrics["hybrid_recall"],
+        retrieval_scope_leakage_count=semantic_metrics["scope_leakage_count"],
         pre_compaction_critical_constraint_retention=float(critical_key in retrieved_keys),
         post_compaction_critical_constraint_retention=float(
             protected_constraint_retained
         ),
         candidate_cases=results,
     )
+
+
+class _BenchmarkEmbeddingProvider:
+    provider_version = "benchmark-semantic-v1"
+
+    def embed(self, texts):
+        vectors = []
+        for text in texts:
+            lowered = text.lower()
+            related = any(
+                phrase in lowered
+                for phrase in (
+                    "asynchronous",
+                    "process interruption",
+                    "worker crash",
+                    "durable lease",
+                )
+            )
+            vectors.append([1.0, 0.0] if related else [0.0, 1.0])
+        return EmbeddingBatch(
+            vectors=vectors,
+            provider_version=self.provider_version,
+            usage={"embedding_calls": 1, "embedding_tokens": len(texts) * 5},
+        )
+
+
+def _semantic_retrieval_metrics(
+    session: Session, contract: GoalContract
+) -> dict[str, int | float]:
+    task = AgentTask(
+        goal_contract_id=contract.id,
+        title="Recover asynchronous work",
+        user_goal="Recover work after process interruption.",
+        constraints=["Do not duplicate execution."],
+        success_criteria=["Retrieve resilient execution evidence."],
+        status="in_progress",
+    )
+    other_contract = GoalContract(
+        version=2,
+        north_star_goal="Keep another user's facts isolated.",
+        product_context="Scope-leakage benchmark.",
+        learning_contract="Measure isolation.",
+        scope_guardrails=["Do not cross contracts."],
+        success_criteria=["Leakage remains zero."],
+        is_active=False,
+    )
+    session.add_all([task, other_contract])
+    session.flush()
+    session.add_all(
+        [
+            AgentMemory(
+                goal_contract_id=contract.id,
+                memory_type="fact",
+                memory_key="semantic-worker-recovery",
+                content="Worker crash recovery uses a durable lease.",
+                source="benchmark",
+                importance=2,
+            ),
+            AgentMemory(
+                goal_contract_id=contract.id,
+                memory_type="fact",
+                memory_key="semantic-distractor",
+                content="The dashboard uses a blue visual palette.",
+                source="benchmark",
+                importance=5,
+            ),
+            AgentMemory(
+                goal_contract_id=other_contract.id,
+                memory_type="fact",
+                memory_key="cross-contract-worker-secret",
+                content="Worker crash recovery uses a private durable lease token.",
+                source="benchmark",
+                importance=5,
+            ),
+        ]
+    )
+    session.flush()
+    lexical = assemble_memory_context(
+        session,
+        task,
+        memory_limit=1,
+        knowledge_limit=0,
+        memory_token_budget=256,
+    )
+    hybrid = assemble_memory_context(
+        session,
+        task,
+        memory_limit=1,
+        knowledge_limit=0,
+        memory_token_budget=256,
+        embedding_provider=_BenchmarkEmbeddingProvider(),
+    )
+    expected = {"semantic-worker-recovery"}
+    lexical_keys = {item["memory_key"] for item in lexical.memories}
+    hybrid_keys = {item["memory_key"] for item in hybrid.memories}
+    return {
+        "lexical_recall": _ratio(len(expected & lexical_keys), len(expected)),
+        "hybrid_recall": _ratio(len(expected & hybrid_keys), len(expected)),
+        "scope_leakage_count": int("cross-contract-worker-secret" in hybrid_keys),
+    }
 
 
 def _free_text_extraction_metrics() -> dict[str, int | float]:

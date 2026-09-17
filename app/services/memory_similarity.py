@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass
 from typing import Protocol, Sequence
@@ -71,6 +72,23 @@ class OpenAIMemoryEmbeddingProvider:
                 "embedding_tokens": response.usage.total_tokens,
             },
         )
+
+
+def create_configured_retrieval_embedding_provider() -> MemoryEmbeddingProvider | None:
+    provider = os.getenv(
+        "CAREEROPS_RETRIEVAL_EMBEDDING_PROVIDER", "disabled"
+    ).strip().lower()
+    if provider in {"", "disabled", "none"}:
+        return None
+    if provider != "openai":
+        raise ValueError(f"unsupported retrieval embedding provider: {provider}")
+    allowed = os.getenv("CAREEROPS_ALLOW_EXTERNAL_RETRIEVAL", "false").strip().lower()
+    if allowed not in {"1", "true", "yes"}:
+        raise ValueError(
+            "external retrieval embeddings require "
+            "CAREEROPS_ALLOW_EXTERNAL_RETRIEVAL=true"
+        )
+    return OpenAIMemoryEmbeddingProvider()
 
 
 def rank_similar_memories(

@@ -13,5 +13,8 @@ def test_memory_benchmark_meets_current_quality_floor():
     assert report.extraction_recall >= 1.0
     assert report.extraction_false_positive_rate == 0.0
     assert report.retrieval_recall >= 1.0
+    assert report.lexical_semantic_retrieval_recall == 0.0
+    assert report.hybrid_semantic_retrieval_recall == 1.0
+    assert report.retrieval_scope_leakage_count == 0
     assert report.pre_compaction_critical_constraint_retention >= 1.0
     assert report.post_compaction_critical_constraint_retention >= 1.0

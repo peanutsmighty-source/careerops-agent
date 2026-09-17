@@ -289,6 +289,7 @@ class ExecutionTraceCreate(BaseModel):
         "model_call",
         "agent_run",
         "memory",
+        "retrieval",
     ]
     status: str = Field(default="recorded", min_length=1, max_length=30)
     input_summary: str = Field(min_length=1)

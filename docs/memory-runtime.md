@@ -144,7 +144,7 @@ Run 完成、审核结果、可选的 episodic memory 和 memory trace 在同一
 3. 重要目标可能被大量低价值历史淹没。
 4. 同一次任务在数据增长后得到不可预测的输入规模。
 
-当前使用确定性词法相关性，优点是便于理解、复现和测试。以后接入 embedding/RAG 时，向量召回替换候选排序，但过期过滤、预算、GoalContract 隔离和审计结构继续保留。
+当前 Context assembly 使用双通道 hybrid retrieval：Memory 在 GoalContract、scope、active 和 expiry 过滤后参与排序，公开 JD requirement 作为独立 evidence 通道；词法、可选 embedding 和 Memory 确定性 prior 通过 RRF 合并。过期过滤、预算、GoalContract 隔离和审计结构不由向量相似度控制。
 
 ## API 和控制台
 
@@ -175,7 +175,7 @@ Runtime Console 的 `MEMORY RUNTIME` 区域显示同一结果。它是预览，�
 
 ## 当前限制
 
-- 相关性还是词法匹配，没有 embedding 和混合检索。
+- 默认运行仍使用词法检索；embedding provider 必须显式配置，并为外部数据出站单独授权。当前没有持久化向量索引或 embedding cache。
 - token 预算使用 LangChain 的本地近似计数器，适合模型调用前的确定性预检；供应商返回的真实 usage 会在调用后单独记录，两者可能因 tokenizer 和消息包装不同而有偏差。
 - working memory 已有 task/run 作用域，并会在对应 Run/Task 终止时软退休；尚未实现自动总结和晋升。
 - Candidate Builder 目前支持 Run outcome 的 episodic 候选和结构化技能需求的 fact 候选；还没有模型驱动的自由文本 fact/preference 提取。

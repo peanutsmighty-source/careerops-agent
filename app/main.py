@@ -529,6 +529,7 @@ def preview_agent_task_memory_context(
     task_id: int,
     run_id: int | None = Query(default=None, ge=1),
     memory_limit: int = Query(default=8, ge=0, le=50),
+    knowledge_limit: int = Query(default=4, ge=0, le=50),
     memory_token_budget: int = Query(default=768, ge=0, le=20000),
     session: Session = Depends(get_session),
 ):
@@ -542,8 +543,9 @@ def preview_agent_task_memory_context(
         task,
         run_id=run_id,
         memory_limit=memory_limit,
+        knowledge_limit=knowledge_limit,
         memory_token_budget=memory_token_budget,
-    ).as_dict()
+    ).as_dict(include_audit=True)
 
 
 @app.get(

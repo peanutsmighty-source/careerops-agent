@@ -95,6 +95,7 @@ python -m app.memory_benchmark
 ```
 
 The Memory benchmark prints labeled Candidate precision/recall, exact decision accuracy, retrieval recall, and critical-constraint retention before and after Context Compaction. It is deterministic and does not call an external model.
+It also compares lexical and hybrid semantic recall and asserts zero cross-GoalContract Memory leakage.
 
 ## Debug a persisted tool call
 
@@ -125,7 +126,7 @@ Replay runs against a temporary SQLite copy and refuses external-write tools. Re
 - `AgentAlignment`: an auditable decision that connects proposed work to an Agent capability, success criterion, and learning outcome.
 - `AgentTask`: a user-level goal contract with constraints, success criteria, and runtime status.
 - `PlanStep`: ordered work that must map to an `AgentTask` success criterion.
-- `ExecutionTrace`: immutable-style event history for user input, plans, tool calls, evaluation, and context compaction.
+- `ExecutionTrace`: immutable-style event history for user input, plans, retrieval, tool calls, evaluation, and context compaction.
 - `ToolCallRecord`: durable current state for one tool operation, including strategy, idempotency identity, attempts, replays, provider operation identity, reconciliation state, and result.
 - `TaskPolicy`: server-side allowlist and risk rules for tools available to one task.
 - `ToolAuthorization`: an auditable allow, deny, or approval-required decision for one ToolCall under one policy version.
@@ -199,3 +200,5 @@ Read [the bounded Agent Loop learning notes](docs/agent-loop-learning.md) for th
 Read [the AgentRun recovery notes](docs/agent-run-recovery.md) for crash windows, atomic Step/ToolCall linking, observation restoration, and outer Workflow resumption.
 
 Read [the Memory Runtime notes](docs/memory-runtime.md) for the difference between durable memory, run state, and assembled model context, plus retrieval and write policies.
+
+Read [the hybrid retrieval and RAG notes](docs/rag-retrieval.md) for scope-first filtering, Memory/JD channels, embedding authorization, RRF ranking, audit, and current scaling limits.
