@@ -15,6 +15,11 @@ from app.services.memory_similarity import EmbeddingBatch
 from app.services.memory_versioning import record_initial_memory_version
 from app.services.context_compaction import compact_agent_context
 from app.services.free_text_candidate_builder import extract_free_text_candidate_proposals
+from app.services.hybrid_retrieval import (
+    SEMANTIC_THRESHOLD,
+    RetrievalDocument,
+    rank_hybrid_documents,
+)
 
 
 @dataclass(frozen=True)
@@ -22,6 +27,15 @@ class CandidateCaseResult:
     case_id: str
     expected_decision: str
     actual_decision: str
+
+
+@dataclass(frozen=True)
+class RetrievalCaseResult:
+    case_id: str
+    expected_key: str
+    lexical_top_key: str | None
+    semantic_top_key: str | None
+    hybrid_top_key: str | None
 
 
 @dataclass(frozen=True)
@@ -37,14 +51,21 @@ class MemoryBenchmarkReport:
     retrieval_recall: float
     lexical_semantic_retrieval_recall: float
     hybrid_semantic_retrieval_recall: float
+    retrieval_case_count: int
+    lexical_retrieval_recall_at_1: float
+    semantic_retrieval_recall_at_1: float
+    hybrid_retrieval_recall_at_1: float
+    hybrid_retrieval_regression_count: int
     retrieval_scope_leakage_count: int
     pre_compaction_critical_constraint_retention: float
     post_compaction_critical_constraint_retention: float
     candidate_cases: tuple[CandidateCaseResult, ...]
+    retrieval_cases: tuple[RetrievalCaseResult, ...]
 
     def as_dict(self) -> dict:
         payload = asdict(self)
         payload["candidate_cases"] = [asdict(case) for case in self.candidate_cases]
+        payload["retrieval_cases"] = [asdict(case) for case in self.retrieval_cases]
         return payload
 
 
@@ -263,6 +284,7 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
             and compacted.compacted_context["task"]["constraints"] == task.constraints
         )
         semantic_metrics = _semantic_retrieval_metrics(session, contract)
+        retrieval_cases = _retrieval_case_results()
 
     expected_positive = [case.expected_decision == "accept" for case in results]
     actual_positive = [case.actual_decision == "accept" for case in results]
@@ -291,12 +313,31 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
         retrieval_recall=_ratio(len(relevant_keys & retrieved_keys), len(relevant_keys)),
         lexical_semantic_retrieval_recall=semantic_metrics["lexical_recall"],
         hybrid_semantic_retrieval_recall=semantic_metrics["hybrid_recall"],
+        retrieval_case_count=len(retrieval_cases),
+        lexical_retrieval_recall_at_1=_retrieval_recall_at_1(
+            retrieval_cases, "lexical_top_key"
+        ),
+        semantic_retrieval_recall_at_1=_retrieval_recall_at_1(
+            retrieval_cases, "semantic_top_key"
+        ),
+        hybrid_retrieval_recall_at_1=_retrieval_recall_at_1(
+            retrieval_cases, "hybrid_top_key"
+        ),
+        hybrid_retrieval_regression_count=sum(
+            case.hybrid_top_key != case.expected_key
+            and (
+                case.lexical_top_key == case.expected_key
+                or case.semantic_top_key == case.expected_key
+            )
+            for case in retrieval_cases
+        ),
         retrieval_scope_leakage_count=semantic_metrics["scope_leakage_count"],
         pre_compaction_critical_constraint_retention=float(critical_key in retrieved_keys),
         post_compaction_critical_constraint_retention=float(
             protected_constraint_retained
         ),
         candidate_cases=results,
+        retrieval_cases=retrieval_cases,
     )
 
 
@@ -307,21 +348,146 @@ class _BenchmarkEmbeddingProvider:
         vectors = []
         for text in texts:
             lowered = text.lower()
-            related = any(
+            recovery_related = any(
                 phrase in lowered
                 for phrase in (
                     "asynchronous",
                     "process interruption",
                     "worker crash",
                     "durable lease",
+                    "进程崩溃",
+                    "恢复后台任务",
                 )
             )
-            vectors.append([1.0, 0.0] if related else [0.0, 1.0])
+            tool_operation_related = any(
+                phrase in lowered
+                for phrase in (
+                    "toolcall 1842",
+                    "external operation outcome unknown",
+                )
+            )
+            if recovery_related:
+                vectors.append([1.0, 0.0, 0.0])
+            elif tool_operation_related:
+                vectors.append([0.0, 1.0, 0.0])
+            else:
+                vectors.append([0.0, 0.0, 1.0])
         return EmbeddingBatch(
             vectors=vectors,
             provider_version=self.provider_version,
             usage={"embedding_calls": 1, "embedding_tokens": len(texts) * 5},
         )
+
+
+def _retrieval_case_results() -> tuple[RetrievalCaseResult, ...]:
+    cases = (
+        (
+            "exact-identifier",
+            "ToolCall 1842 timeout",
+            "z-toolcall-1842",
+            (
+                RetrievalDocument(
+                    key="z-toolcall-1842",
+                    source_type="trace",
+                    content="ToolCall 1842 timeout",
+                    payload={},
+                ),
+                RetrievalDocument(
+                    key="a-operation-unknown",
+                    source_type="trace",
+                    content="External operation outcome unknown",
+                    payload={},
+                ),
+            ),
+        ),
+        (
+            "semantic-paraphrase",
+            "Resume asynchronous work after process interruption",
+            "worker-recovery",
+            (
+                RetrievalDocument(
+                    key="worker-recovery",
+                    source_type="memory",
+                    content="Worker crash recovery uses a durable lease",
+                    payload={},
+                ),
+                RetrievalDocument(
+                    key="visual-theme",
+                    source_type="memory",
+                    content="The dashboard uses a blue visual palette",
+                    payload={},
+                ),
+            ),
+        ),
+        (
+            "cross-language",
+            "进程崩溃后如何恢复后台任务",
+            "worker-recovery-english",
+            (
+                RetrievalDocument(
+                    key="worker-recovery-english",
+                    source_type="memory",
+                    content="Worker crash recovery uses a durable lease",
+                    payload={},
+                ),
+                RetrievalDocument(
+                    key="frontend-layout",
+                    source_type="memory",
+                    content="Build responsive frontend layouts",
+                    payload={},
+                ),
+            ),
+        ),
+    )
+    provider = _BenchmarkEmbeddingProvider()
+    results = []
+    for case_id, query, expected_key, documents in cases:
+        lexical = rank_hybrid_documents(query, documents, limit=len(documents))
+        hybrid = rank_hybrid_documents(
+            query,
+            documents,
+            embedding_provider=provider,
+            limit=len(documents),
+        )
+        semantic_candidates = sorted(
+            (
+                candidate
+                for candidate in hybrid.candidates
+                if candidate.semantic_score is not None
+                and candidate.semantic_score >= SEMANTIC_THRESHOLD
+            ),
+            key=lambda candidate: (
+                -candidate.semantic_score,
+                candidate.document.key,
+            ),
+        )
+        results.append(
+            RetrievalCaseResult(
+                case_id=case_id,
+                expected_key=expected_key,
+                lexical_top_key=(
+                    lexical.candidates[0].document.key if lexical.candidates else None
+                ),
+                semantic_top_key=(
+                    semantic_candidates[0].document.key
+                    if semantic_candidates
+                    else None
+                ),
+                hybrid_top_key=(
+                    hybrid.candidates[0].document.key if hybrid.candidates else None
+                ),
+            )
+        )
+    return tuple(results)
+
+
+def _retrieval_recall_at_1(
+    cases: tuple[RetrievalCaseResult, ...], field: str
+) -> float:
+    return _ratio(
+        sum(getattr(case, field) == case.expected_key for case in cases),
+        len(cases),
+    )
 
 
 def _semantic_retrieval_metrics(

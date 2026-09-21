@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **18 capabilities**: 18 complete and 0 open. Sources: 8 `user-direct`, 6 `user-derived`, and 4 `roadmap`.
+Tracked count: **19 capabilities**: 19 complete and 0 open. Sources: 8 `user-direct`, 7 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -55,6 +55,11 @@ Tracked count: **18 capabilities**: 18 complete and 0 open. Sources: 8 `user-dir
   - Preserve scope, lifecycle, evidence, and deterministic filters around vector retrieval.
   - Acceptance: retrieval improves relevant Memory/JD recall without leaking across contracts.
   - Minimal implementation: scope-first Memory and public JD channels, lexical/optional embedding RRF, persistent provider-version/content-hash cache, shared token budget, provenance, retrieval Trace, safe fallback, and deterministic recall/leakage benchmarks. ANN vector indexing and model reranking remain future production work.
+
+- [x] **T19 Compare retrieval strategies across query types** (`user-derived`)
+  - Measure lexical, semantic, and hybrid Recall@1 on exact-identifier, semantic-paraphrase, and cross-language cases.
+  - Acceptance: hybrid retrieval covers the strengths of both single routes without regressing a case either route gets right.
+  - Minimal implementation: deterministic labeled cases and per-case top-result audit. Larger real-query datasets, query routing, and reranker evaluation remain future work.
 
 - [x] **T03 Add free-text Candidate Builder** (`roadmap`)
   - Extract explicit user facts, preferences, corrections, and reusable episodes with structured output.

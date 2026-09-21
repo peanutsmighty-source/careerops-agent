@@ -29,6 +29,8 @@ Each channel uses Reciprocal Rank Fusion over:
 
 Semantic results below the configured threshold do not enter the semantic rank. An embedding error records only the exception type and falls back to lexical retrieval. It never asks the Agent model to guess missing retrieval results.
 
+Metadata is not a universal hand-written importance score. Memory carries explicit scope, lifecycle, source, type, and importance because those fields control private runtime behavior. JD evidence instead carries job identity, requirement type, source URL, timestamps where available, and an untrusted-evidence label. Deterministic filters and provenance use this metadata before or after relevance ranking; semantic similarity never determines authorization or truth.
+
 ## Persistent embedding cache
 
 When semantic retrieval is enabled, `CachedRetrievalEmbeddingProvider` looks up each query and eligible document by `(provider_version, content_sha256)` before calling the configured provider. Cache misses are embedded in one batch and stored in `retrieval_embedding_cache`; cache hits reuse the stored vector. The table stores the hash and vector, not a duplicate of the Memory or JD text.
@@ -62,7 +64,7 @@ The second flag is an explicit data-egress acknowledgement because eligible Memo
 
 ## Quality checks
 
-The deterministic benchmark now reports lexical semantic recall, hybrid semantic recall, and cross-contract leakage. Its labeled synonym case improves from lexical recall `0.0` to hybrid recall `1.0`, while leakage remains `0`. The cache regression fixture records 5 unique misses and 2 provider batches on the first two-channel retrieval, then 6 hits and 0 provider calls on an identical repeat. It also verifies that editing one document recomputes only that document and changing the provider version creates an isolated cache namespace. API/AgentLoop tests additionally verify JD evidence retrieval, token budgeting, trace persistence, external-provider authorization, and lexical fallback.
+The deterministic benchmark now reports per-case top results and Recall@1 for lexical, semantic, and hybrid retrieval. Across one exact-identifier, one semantic-paraphrase, and one cross-language case, the current fixture scores lexical `1/3`, semantic `2/3`, and hybrid `3/3`, with zero fusion regressions and zero cross-contract leakage. These cases demonstrate complementary failure modes rather than claiming production ranking quality. The cache regression fixture records 5 unique misses and 2 provider batches on the first two-channel retrieval, then 6 hits and 0 provider calls on an identical repeat. It also verifies that editing one document recomputes only that document and changing the provider version creates an isolated cache namespace. API/AgentLoop tests additionally verify JD evidence retrieval, token budgeting, trace persistence, external-provider authorization, and lexical fallback.
 
 These are small regression fixtures, not evidence of production ranking quality. A production corpus needs larger labeled Recall@K/nDCG and citation-grounding evaluations.
 
@@ -74,3 +76,4 @@ These are small regression fixtures, not evidence of production ranking quality.
 - JD retrieval currently uses structured `JobRequirement.evidence_text`, not arbitrary raw-archive chunking.
 - RRF weights and semantic threshold are fixed rather than calibrated on real user judgments.
 - There is no model reranker. Deterministic filters, hybrid scores, and token budget remain authoritative.
+- The three-case strategy benchmark is diagnostic scaffolding; query routing or reranking should not be added until a larger labeled set demonstrates a repeatable failure mode.

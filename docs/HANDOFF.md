@@ -1,6 +1,6 @@
 # CareerOps Current Handoff
 
-Updated: 2026-09-17
+Updated: 2026-09-21
 
 This file contains only volatile development state. Stable architecture is in `README.md`; priorities are in `TODO.md`; explanations are in focused `docs/` notes.
 
@@ -15,7 +15,7 @@ This file contains only volatile development state. Stable architecture is in `R
 
 ## Current Task
 
-Complete T12 scope-first hybrid retrieval and RAG.
+Complete T19 retrieval-strategy evaluation before selecting the next ranking mechanism.
 
 Implemented and verified:
 
@@ -27,15 +27,17 @@ Implemented and verified:
 - External embeddings are disabled by default and require both provider selection and explicit data-egress acknowledgement.
 - Embedding errors fall back to lexical retrieval with an auditable failure type.
 - Embeddings are reused from a persistent `(provider_version, content_sha256)` cache; changed content and changed provider versions miss independently.
+- The deterministic benchmark compares lexical, semantic, and hybrid top results across exact-identifier, semantic-paraphrase, and cross-language cases.
 
 See `app/services/hybrid_retrieval.py`, `app/services/retrieval_embedding_cache.py`, `app/services/memory_runtime.py`, `docs/rag-retrieval.md`, and `tests/test_hybrid_retrieval.py`.
 
 ## Verification
 
 - Targeted retrieval, benchmark, token-budget, and compaction suites: passed.
-- Full suite: 105 passed (101.06 seconds under branch coverage).
-- Coverage with branch measurement: 88%; hybrid retrieval module: 92%, Memory Runtime: 87%, embedding cache: 83%.
+- Full suite: 105 passed (127.52 seconds under branch coverage).
+- Coverage with branch measurement: 88%; benchmark module: 96%, hybrid retrieval module: 92%, Memory Runtime: 87%, embedding cache: 83%.
 - Deterministic semantic benchmark: lexical recall 0.0, hybrid recall 1.0, cross-contract leakage 0.
+- Retrieval-strategy fixture: lexical Recall@1 `1/3`, semantic Recall@1 `2/3`, hybrid Recall@1 `3/3`, fusion regressions `0`.
 - Cache fixture: first retrieval 5 unique misses/2 provider batches; identical repeat 6 hits/0 provider calls; one changed document causes one miss/one provider batch.
 - T12 file diff check must exclude the unrelated trailing whitespace in `agent_run_lease.py`.
 
@@ -65,7 +67,8 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. All 18 tracked capabilities are complete at their documented minimal scope.
-2. Do not begin multi-agent work without a concrete scenario and explicit user direction.
+1. All 19 tracked capabilities are complete at their documented minimal scope.
+2. T19 adds evaluation depth rather than a new runtime dependency; use a larger labeled query set before choosing query routing or a reranker.
+3. Do not begin multi-agent work without a concrete scenario and explicit user direction.
 
 Do not start multi-agent work yet.
