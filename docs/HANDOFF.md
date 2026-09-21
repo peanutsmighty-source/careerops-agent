@@ -10,12 +10,12 @@ This file contains only volatile development state. Stable architecture is in `R
 - Delivery remote/upstream: `private-origin` (`https://github.com/peanutsmighty-source/careerops-agent-private.git`)
 - Public remote: `origin` (`https://github.com/peanutsmighty-source/careerops-agent.git`), currently at the T14 baseline; do not publish private changes there without explicit destination-specific authorization.
 - Branch: `main`
-- Delivery baseline: local `HEAD` includes T16, T17, T12, and the persistent embedding-cache follow-up. Use `git status --short --branch` and `git log -4 --oneline` to verify the exact remote relation and immutable commit IDs.
+- Delivery baseline: local `HEAD` is complete through T20 after the current commit. Use `git status --short --branch` and `git log -5 --oneline` to verify the exact remote relation and immutable commit IDs.
 - Never print or commit `ds_key.txt` or environment API keys.
 
 ## Current Task
 
-Complete T19 retrieval-strategy evaluation before selecting the next ranking mechanism.
+Complete T20 conservative query routing after T19 exposed a safe cost-saving case.
 
 Implemented and verified:
 
@@ -28,18 +28,21 @@ Implemented and verified:
 - Embedding errors fall back to lexical retrieval with an auditable failure type.
 - Embeddings are reused from a persistent `(provider_version, content_sha256)` cache; changed content and changed provider versions miss independently.
 - The deterministic benchmark compares lexical, semantic, and hybrid top results across exact-identifier, semantic-paraphrase, and cross-language cases.
+- The deterministic router sends short exact-ID lookups to lexical retrieval and conservatively keeps semantic/cross-language queries on hybrid retrieval.
+- Context and retrieval Trace audit record the selected route, reason, and matched signals.
 
-See `app/services/hybrid_retrieval.py`, `app/services/retrieval_embedding_cache.py`, `app/services/memory_runtime.py`, `docs/rag-retrieval.md`, and `tests/test_hybrid_retrieval.py`.
+See `app/services/hybrid_retrieval.py`, `app/services/retrieval_router.py`, `app/services/retrieval_embedding_cache.py`, `app/services/memory_runtime.py`, `docs/rag-retrieval.md`, and `tests/test_retrieval_router.py`.
 
 ## Verification
 
 - Targeted retrieval, benchmark, token-budget, and compaction suites: passed.
-- Full suite: 105 passed (127.52 seconds under branch coverage).
-- Coverage with branch measurement: 88%; benchmark module: 96%, hybrid retrieval module: 92%, Memory Runtime: 87%, embedding cache: 83%.
+- Full suite: 108 passed (101.43 seconds under branch coverage).
+- Coverage with branch measurement: 89%; query router: 100%, benchmark module: 96%, hybrid retrieval module: 92%, Memory Runtime: 88%, embedding cache: 83%.
 - Deterministic semantic benchmark: lexical recall 0.0, hybrid recall 1.0, cross-contract leakage 0.
 - Retrieval-strategy fixture: lexical Recall@1 `1/3`, semantic Recall@1 `2/3`, hybrid Recall@1 `3/3`, fusion regressions `0`.
+- Routed fixture: Recall@1 `3/3` with two embedding batches rather than three; the exact-ID case uses lexical retrieval with zero embedding calls.
 - Cache fixture: first retrieval 5 unique misses/2 provider batches; identical repeat 6 hits/0 provider calls; one changed document causes one miss/one provider batch.
-- T12 file diff check must exclude the unrelated trailing whitespace in `agent_run_lease.py`.
+- T20 file diff check must exclude the unrelated trailing whitespace in `agent_run_lease.py`.
 
 Use:
 
@@ -53,7 +56,8 @@ python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
 - Obsolete cache rows do not yet have eviction or orphan cleanup.
 - JD RAG indexes structured requirement evidence rather than arbitrary raw-archive chunks.
 - RRF weights and semantic threshold are fixed; the benchmark is a small deterministic regression set, not production-quality ranking evidence.
-- The unrelated trailing-whitespace worktree edit in `agent_run_lease.py` is preserved and excluded from T12 delivery.
+- The route taxonomy is intentionally narrow: only short exact numeric identifiers bypass embeddings; all ambiguous queries retain hybrid recall.
+- The unrelated trailing-whitespace worktree edit in `agent_run_lease.py` is preserved and excluded from T20 delivery.
 
 ## Present but Not Default-Wired
 
@@ -67,8 +71,8 @@ Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if p
 
 ## Next Steps
 
-1. All 19 tracked capabilities are complete at their documented minimal scope.
-2. T19 adds evaluation depth rather than a new runtime dependency; use a larger labeled query set before choosing query routing or a reranker.
+1. All 20 tracked capabilities are complete at their documented minimal scope.
+2. T20 turns one measured T19 failure pattern into an auditable route; expand the labeled query set before adding more intent classes or a reranker.
 3. Do not begin multi-agent work without a concrete scenario and explicit user direction.
 
 Do not start multi-agent work yet.

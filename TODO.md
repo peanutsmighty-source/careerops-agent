@@ -8,7 +8,7 @@ This backlog tracks product capabilities, not individual code edits. Completed f
 - `user-derived`: exposed by following the user's questions to an architectural consequence.
 - `roadmap`: already implied by the original Agent Harness roadmap.
 
-Tracked count: **19 capabilities**: 19 complete and 0 open. Sources: 8 `user-direct`, 7 `user-derived`, and 4 `roadmap`.
+Tracked count: **20 capabilities**: 20 complete and 0 open. Sources: 8 `user-direct`, 8 `user-derived`, and 4 `roadmap`.
 
 ## P0 - Memory Gate v2
 
@@ -59,7 +59,12 @@ Tracked count: **19 capabilities**: 19 complete and 0 open. Sources: 8 `user-dir
 - [x] **T19 Compare retrieval strategies across query types** (`user-derived`)
   - Measure lexical, semantic, and hybrid Recall@1 on exact-identifier, semantic-paraphrase, and cross-language cases.
   - Acceptance: hybrid retrieval covers the strengths of both single routes without regressing a case either route gets right.
-  - Minimal implementation: deterministic labeled cases and per-case top-result audit. Larger real-query datasets, query routing, and reranker evaluation remain future work.
+  - Minimal implementation: deterministic labeled cases and per-case top-result audit. Larger real-query datasets and reranker evaluation remain future work.
+
+- [x] **T20 Route exact lookups without unnecessary embeddings** (`user-derived`)
+  - Choose a retrieval route from auditable query signals instead of running every available retriever for every request.
+  - Acceptance: short exact-identifier lookups skip embedding calls without losing Recall@1; semantic and cross-language cases retain hybrid retrieval.
+  - Minimal implementation: deterministic exact-ID detection, conservative hybrid fallback, route metadata in Context/Trace audit, and benchmarked quality/cost behavior. A learned or LLM router and broader intent taxonomy remain future work.
 
 - [x] **T03 Add free-text Candidate Builder** (`roadmap`)
   - Extract explicit user facts, preferences, corrections, and reusable episodes with structured output.

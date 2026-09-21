@@ -95,7 +95,7 @@ python -m app.memory_benchmark
 ```
 
 The Memory benchmark prints labeled Candidate precision/recall, exact decision accuracy, retrieval recall, and critical-constraint retention before and after Context Compaction. It is deterministic and does not call an external model.
-It also compares lexical, semantic, and hybrid Recall@1 across exact-identifier, semantic-paraphrase, and cross-language queries, checks that fusion does not regress a case won by either single route, and asserts zero cross-GoalContract Memory leakage.
+It also compares lexical, semantic, hybrid, and routed Recall@1 across exact-identifier, semantic-paraphrase, and cross-language queries. The routed benchmark checks that exact-ID lookup avoids an embedding call without losing recall, semantic/cross-language cases retain hybrid retrieval, fusion does not regress a case won by either single route, and no cross-GoalContract Memory leaks.
 
 ## Debug a persisted tool call
 

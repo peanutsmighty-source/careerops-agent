@@ -181,6 +181,8 @@ def test_hybrid_retrieval_improves_semantic_recall_without_contract_leakage():
         assert [item["skill"] for item in hybrid.knowledge] == ["Distributed Jobs"]
         assert hybrid.candidate_count == 2
         assert hybrid.retrieval_method == "hybrid"
+        assert hybrid.retrieval_route == "hybrid"
+        assert hybrid.retrieval_route_reason == "default_recall_route"
         assert hybrid.embedding_usage["embedding_calls"] == 2
         assert hybrid.embedding_usage["cache_hits"] == 1
         assert hybrid.embedding_usage["cache_misses"] == 5
@@ -245,6 +247,7 @@ def test_hybrid_retrieval_improves_semantic_recall_without_contract_leakage():
     AgentLoopEngine(model, retrieval_embedding_provider=provider).run(run_id)
 
     assert model.request.memory_context["retrieval"]["method"] == "hybrid"
+    assert model.request.memory_context["retrieval"]["route"] == "hybrid"
     assert model.request.memory_context["knowledge"][0]["skill"] == "Distributed Jobs"
     with Session(engine) as session:
         trace = session.scalar(

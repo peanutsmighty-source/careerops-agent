@@ -20,6 +20,7 @@ from app.services.hybrid_retrieval import (
     RetrievalDocument,
     rank_hybrid_documents,
 )
+from app.services.retrieval_router import choose_retrieval_route
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,10 @@ class RetrievalCaseResult:
     lexical_top_key: str | None
     semantic_top_key: str | None
     hybrid_top_key: str | None
+    routed_top_key: str | None
+    route_strategy: str
+    route_reason: str
+    routed_embedding_calls: int
 
 
 @dataclass(frozen=True)
@@ -55,6 +60,8 @@ class MemoryBenchmarkReport:
     lexical_retrieval_recall_at_1: float
     semantic_retrieval_recall_at_1: float
     hybrid_retrieval_recall_at_1: float
+    routed_retrieval_recall_at_1: float
+    routed_retrieval_embedding_calls: int
     hybrid_retrieval_regression_count: int
     retrieval_scope_leakage_count: int
     pre_compaction_critical_constraint_retention: float
@@ -323,6 +330,12 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
         hybrid_retrieval_recall_at_1=_retrieval_recall_at_1(
             retrieval_cases, "hybrid_top_key"
         ),
+        routed_retrieval_recall_at_1=_retrieval_recall_at_1(
+            retrieval_cases, "routed_top_key"
+        ),
+        routed_retrieval_embedding_calls=sum(
+            case.routed_embedding_calls for case in retrieval_cases
+        ),
         hybrid_retrieval_regression_count=sum(
             case.hybrid_top_key != case.expected_key
             and (
@@ -344,7 +357,11 @@ def run_memory_benchmark() -> MemoryBenchmarkReport:
 class _BenchmarkEmbeddingProvider:
     provider_version = "benchmark-semantic-v1"
 
+    def __init__(self):
+        self.call_count = 0
+
     def embed(self, texts):
+        self.call_count += 1
         vectors = []
         for text in texts:
             lowered = text.lower()
@@ -449,6 +466,16 @@ def _retrieval_case_results() -> tuple[RetrievalCaseResult, ...]:
             embedding_provider=provider,
             limit=len(documents),
         )
+        route = choose_retrieval_route(query, embedding_available=True)
+        routed_provider = _BenchmarkEmbeddingProvider()
+        routed = rank_hybrid_documents(
+            query,
+            documents,
+            embedding_provider=(
+                routed_provider if route.strategy == "hybrid" else None
+            ),
+            limit=len(documents),
+        )
         semantic_candidates = sorted(
             (
                 candidate
@@ -476,6 +503,12 @@ def _retrieval_case_results() -> tuple[RetrievalCaseResult, ...]:
                 hybrid_top_key=(
                     hybrid.candidates[0].document.key if hybrid.candidates else None
                 ),
+                routed_top_key=(
+                    routed.candidates[0].document.key if routed.candidates else None
+                ),
+                route_strategy=route.strategy,
+                route_reason=route.reason,
+                routed_embedding_calls=routed_provider.call_count,
             )
         )
     return tuple(results)

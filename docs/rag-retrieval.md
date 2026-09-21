@@ -29,6 +29,12 @@ Each channel uses Reciprocal Rank Fusion over:
 
 Semantic results below the configured threshold do not enter the semantic rank. An embedding error records only the exception type and falls back to lexical retrieval. It never asks the Agent model to guess missing retrieval results.
 
+## Query routing
+
+T20 adds a deterministic router before ranking. A short query containing an exact CareerOps numeric identifier such as `ToolCall 1842` uses lexical retrieval and does not invoke the embedding provider. Every other query uses hybrid retrieval when an embedding provider is available; without one, the route is lexical.
+
+This policy is deliberately conservative. Exact identifiers are a strong lexical signal, while semantic paraphrases and cross-language queries are precisely the cases where embeddings recover lexical misses. The route, reason, and matched signals are stored in retrieval audit metadata, so a cost-saving decision can be reproduced instead of hidden inside a model prompt. A future learned or LLM router would remain an untrusted proposal and would need an evaluated fallback route.
+
 Metadata is not a universal hand-written importance score. Memory carries explicit scope, lifecycle, source, type, and importance because those fields control private runtime behavior. JD evidence instead carries job identity, requirement type, source URL, timestamps where available, and an untrusted-evidence label. Deterministic filters and provenance use this metadata before or after relevance ranking; semantic similarity never determines authorization or truth.
 
 ## Persistent embedding cache
@@ -64,7 +70,7 @@ The second flag is an explicit data-egress acknowledgement because eligible Memo
 
 ## Quality checks
 
-The deterministic benchmark now reports per-case top results and Recall@1 for lexical, semantic, and hybrid retrieval. Across one exact-identifier, one semantic-paraphrase, and one cross-language case, the current fixture scores lexical `1/3`, semantic `2/3`, and hybrid `3/3`, with zero fusion regressions and zero cross-contract leakage. These cases demonstrate complementary failure modes rather than claiming production ranking quality. The cache regression fixture records 5 unique misses and 2 provider batches on the first two-channel retrieval, then 6 hits and 0 provider calls on an identical repeat. It also verifies that editing one document recomputes only that document and changing the provider version creates an isolated cache namespace. API/AgentLoop tests additionally verify JD evidence retrieval, token budgeting, trace persistence, external-provider authorization, and lexical fallback.
+The deterministic benchmark now reports per-case top results and Recall@1 for lexical, semantic, hybrid, and routed retrieval. Across one exact-identifier, one semantic-paraphrase, and one cross-language case, the current fixture scores lexical `1/3`, semantic `2/3`, hybrid `3/3`, and routed `3/3`, with zero fusion regressions and zero cross-contract leakage. Routing uses two embedding batches rather than three because the exact-ID case takes the lexical route. These cases demonstrate complementary failure modes and a measurable cost tradeoff rather than claiming production ranking quality. The cache regression fixture records 5 unique misses and 2 provider batches on the first two-channel retrieval, then 6 hits and 0 provider calls on an identical repeat. It also verifies that editing one document recomputes only that document and changing the provider version creates an isolated cache namespace. API/AgentLoop tests additionally verify JD evidence retrieval, token budgeting, trace persistence, external-provider authorization, and lexical fallback.
 
 These are small regression fixtures, not evidence of production ranking quality. A production corpus needs larger labeled Recall@K/nDCG and citation-grounding evaluations.
 
@@ -76,4 +82,4 @@ These are small regression fixtures, not evidence of production ranking quality.
 - JD retrieval currently uses structured `JobRequirement.evidence_text`, not arbitrary raw-archive chunking.
 - RRF weights and semantic threshold are fixed rather than calibrated on real user judgments.
 - There is no model reranker. Deterministic filters, hybrid scores, and token budget remain authoritative.
-- The three-case strategy benchmark is diagnostic scaffolding; query routing or reranking should not be added until a larger labeled set demonstrates a repeatable failure mode.
+- The three-case strategy benchmark is diagnostic scaffolding. The router recognizes only a measured exact-ID pattern; broader routing or reranking needs a larger labeled set.

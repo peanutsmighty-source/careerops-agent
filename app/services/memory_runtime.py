@@ -15,6 +15,7 @@ from app.services.hybrid_retrieval import (
 )
 from app.services.memory_similarity import MemoryEmbeddingProvider
 from app.services.retrieval_embedding_cache import CachedRetrievalEmbeddingProvider
+from app.services.retrieval_router import choose_retrieval_route
 from app.services.token_budget import estimate_tokens
 
 
@@ -34,6 +35,9 @@ class MemoryContext:
     token_budget: int
     tokens_used: int
     retrieval_method: str
+    retrieval_route: str
+    retrieval_route_reason: str
+    retrieval_route_signals: tuple[str, ...]
     embedding_provider_version: str | None
     embedding_usage: dict[str, int]
     embedding_error: str | None
@@ -52,6 +56,7 @@ class MemoryContext:
             "tokens_used": self.tokens_used,
             "token_estimator": "langchain_count_tokens_approximately_v1",
             "method": self.retrieval_method,
+            "route": self.retrieval_route,
         }
         if include_audit:
             retrieval.update(self.audit_dict())
@@ -65,6 +70,8 @@ class MemoryContext:
     def audit_dict(self) -> dict:
         return {
             "embedding_provider_version": self.embedding_provider_version,
+            "retrieval_route_reason": self.retrieval_route_reason,
+            "retrieval_route_signals": list(self.retrieval_route_signals),
             "embedding_usage": self.embedding_usage,
             "embedding_error": self.embedding_error,
             "selected_scores": self.selected_scores,
@@ -189,11 +196,18 @@ def assemble_memory_context(
         if embedding_provider
         else None
     )
+    route = choose_retrieval_route(
+        query,
+        embedding_available=cached_embedding_provider is not None,
+    )
+    routed_embedding_provider = (
+        cached_embedding_provider if route.strategy == "hybrid" else None
+    )
     memory_result, knowledge_result = _rank_channels(
         query,
         memory_documents if memory_limit else [],
         knowledge_documents if knowledge_limit else [],
-        embedding_provider=cached_embedding_provider,
+        embedding_provider=routed_embedding_provider,
         enabled=memory_token_budget > 0,
     )
     selected, knowledge, tokens_used, selected_scores = _select_under_budget(
@@ -237,6 +251,9 @@ def assemble_memory_context(
         token_budget=memory_token_budget,
         tokens_used=tokens_used,
         retrieval_method=retrieval_method,
+        retrieval_route=route.strategy,
+        retrieval_route_reason=route.reason,
+        retrieval_route_signals=route.signals,
         embedding_provider_version=(
             embedding_provider.provider_version if embedding_provider else None
         ),
