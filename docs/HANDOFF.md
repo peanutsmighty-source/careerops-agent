@@ -1,78 +1,102 @@
 # CareerOps Current Handoff
 
-Updated: 2026-09-21
+Updated: 2026-09-23
 
-This file contains only volatile development state. Stable architecture is in `README.md`; priorities are in `TODO.md`; explanations are in focused `docs/` notes.
+This file contains volatile development state only. Use `README.md` for the stable product/API overview, `TODO.md` for accepted capabilities, and focused documents under `docs/` for subsystem design.
 
-## Repository
+## Repository State
 
 - Workspace: `E:\tmp\careerops-agent`
-- Delivery remote/upstream: `private-origin` (`https://github.com/peanutsmighty-source/careerops-agent-private.git`)
-- Public remote: `origin` (`https://github.com/peanutsmighty-source/careerops-agent.git`), currently at the T14 baseline; do not publish private changes there without explicit destination-specific authorization.
 - Branch: `main`
-- Delivery baseline: local `HEAD` is complete through T20 after the current commit. Use `git status --short --branch` and `git log -5 --oneline` to verify the exact remote relation and immutable commit IDs.
-- Never print or commit `ds_key.txt` or environment API keys.
+- Delivery remote/upstream: `origin` (`https://github.com/peanutsmighty-source/careerops-agent.git`)
+- Synced delivery commit: `28fbf9a Route exact retrieval queries conservatively`
+- `main` and `origin/main` are synchronized at the handoff point (`0` ahead, `0` behind).
+- Seven commits from T15 through T20 were explicitly authorized for the public repository and pushed on 2026-09-22.
+- `private-origin` still exists in local Git configuration but points to the nonexistent `careerops-agent-private` repository. Do not use it as an upstream or delivery target.
+- Never print or commit `ds_key.txt`, environment API keys, local databases, caches, `.test-tmp`, or `.codex-*.patch` files.
 
-## Current Task
+## Breakpoint
 
-Complete T20 conservative query routing after T19 exposed a safe cost-saving case.
+All 20 capabilities currently tracked in `TODO.md` are complete at their documented minimal scope. There is no accepted open implementation item.
 
-Implemented and verified:
+The latest completed sequence is:
+
+1. `6c8adc1` — reconcile uncertain external tool writes (T15).
+2. `15f1acf` — add one-time external-write approvals (T16).
+3. `d669132` — add historical before-state replay (T17).
+4. `4169245` — add scope-safe hybrid retrieval and RAG (T12).
+5. `608ddc7` — cache retrieval embeddings by provider version and content hash.
+6. `ea138cb` — benchmark lexical, semantic, and hybrid retrieval by query type (T19).
+7. `28fbf9a` — route exact identifier lookups without unnecessary embeddings (T20).
+
+Do not start another major capability until its problem, source label, acceptance criteria, and learning outcome are added to `TODO.md`.
+
+## Latest Retrieval State
 
 - Memory eligibility is filtered by GoalContract, active lifecycle, expiry, and contract/task/run scope before ranking.
-- Memory and public JD requirements use separate retrieval channels and share the Context token budget.
+- Memory and public JD evidence use separate retrieval channels and share one Context token budget.
 - Lexical, optional embedding, and deterministic Memory-prior ranks are fused with RRF.
 - JD evidence retains requirement/job IDs and source URL and is labeled untrusted evidence-only content.
-- AgentLoop stores compact retrieval metadata in model Context and full query/filter/score/provider audit in AgentRunStep plus a retrieval Trace.
-- External embeddings are disabled by default and require both provider selection and explicit data-egress acknowledgement.
-- Embedding errors fall back to lexical retrieval with an auditable failure type.
-- Embeddings are reused from a persistent `(provider_version, content_sha256)` cache; changed content and changed provider versions miss independently.
-- The deterministic benchmark compares lexical, semantic, and hybrid top results across exact-identifier, semantic-paraphrase, and cross-language cases.
-- The deterministic router sends short exact-ID lookups to lexical retrieval and conservatively keeps semantic/cross-language queries on hybrid retrieval.
-- Context and retrieval Trace audit record the selected route, reason, and matched signals.
+- External embeddings are disabled by default and require provider selection plus explicit data-egress acknowledgement.
+- Embeddings are persisted by `(provider_version, content_sha256)`; changed content and provider versions miss independently.
+- The deterministic router sends short exact numeric identifier lookups to lexical retrieval. Semantic, cross-language, and ambiguous queries retain hybrid retrieval when embeddings are available.
+- Context and retrieval Trace audit store the selected route, reason, signals, filters, scores, provider version, usage, and failure mode.
 
-See `app/services/hybrid_retrieval.py`, `app/services/retrieval_router.py`, `app/services/retrieval_embedding_cache.py`, `app/services/memory_runtime.py`, `docs/rag-retrieval.md`, and `tests/test_retrieval_router.py`.
+Primary files:
 
-## Verification
+- `app/services/hybrid_retrieval.py`
+- `app/services/retrieval_router.py`
+- `app/services/retrieval_embedding_cache.py`
+- `app/services/memory_runtime.py`
+- `app/memory_benchmark.py`
+- `docs/rag-retrieval.md`
+- `tests/test_hybrid_retrieval.py`
+- `tests/test_retrieval_router.py`
+- `tests/test_memory_benchmark.py`
 
-- Targeted retrieval, benchmark, token-budget, and compaction suites: passed.
-- Full suite: 108 passed (101.43 seconds under branch coverage).
-- Coverage with branch measurement: 89%; query router: 100%, benchmark module: 96%, hybrid retrieval module: 92%, Memory Runtime: 88%, embedding cache: 83%.
-- Deterministic semantic benchmark: lexical recall 0.0, hybrid recall 1.0, cross-contract leakage 0.
-- Retrieval-strategy fixture: lexical Recall@1 `1/3`, semantic Recall@1 `2/3`, hybrid Recall@1 `3/3`, fusion regressions `0`.
-- Routed fixture: Recall@1 `3/3` with two embedding batches rather than three; the exact-ID case uses lexical retrieval with zero embedding calls.
+## Verification Baseline
+
+- Full suite: 108 passed in 101.43 seconds under branch coverage.
+- Total branch coverage: 89%.
+- Query router: 100%; benchmark: 96%; hybrid retrieval: 92%; Memory Runtime: 88%; embedding cache: 83%.
+- Strategy fixture: lexical Recall@1 `1/3`, semantic `2/3`, hybrid `3/3`, routed `3/3`.
+- Routed retrieval uses two embedding batches rather than three because the exact-ID case uses lexical retrieval with zero embedding calls.
+- Fusion regressions: `0`; cross-GoalContract Memory leakage: `0`.
 - Cache fixture: first retrieval 5 unique misses/2 provider batches; identical repeat 6 hits/0 provider calls; one changed document causes one miss/one provider batch.
-- T20 file diff check must exclude the unrelated trailing whitespace in `agent_run_lease.py`.
 
-Use:
+Re-run with:
 
 ```powershell
-python -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
+python -m coverage run --branch -m pytest -q --basetemp=.test-tmp -p no:cacheprovider
+python -m coverage report -m
+python -m app.memory_benchmark
 ```
 
-## Review Before Completion
+## Dirty Worktree and Cleanup
 
-- The persistent embedding cache avoids recomputation but is not an ANN index; eligible rows are still scanned and ranked in Python.
-- Obsolete cache rows do not yet have eviction or orphan cleanup.
-- JD RAG indexes structured requirement evidence rather than arbitrary raw-archive chunks.
-- RRF weights and semantic threshold are fixed; the benchmark is a small deterministic regression set, not production-quality ranking evidence.
-- The route taxonomy is intentionally narrow: only short exact numeric identifiers bypass embeddings; all ambiguous queries retain hybrid recall.
-- The unrelated trailing-whitespace worktree edit in `agent_run_lease.py` is preserved and excluded from T20 delivery.
+- Preserve the existing unstaged edit in `app/services/agent_run_lease.py`. It adds two trailing spaces at line 129 and is unrelated to T15-T20.
+- `test_careerops.db` may be regenerated by tests and is present at this handoff. Remove it before staging any future delivery.
+- Run `git status --short` before and after tests. Remove generated `.test-tmp*`, `.coverage`, `test_careerops.db`, and `.codex-*.patch` artifacts; never stage them.
+- Stage future changes by explicit path so the unrelated lease edit cannot enter a commit accidentally.
 
-## Present but Not Default-Wired
+## Known Limits
 
-- DeepSeek semantic Memory evaluation exists and is tested, but automatic AgentRun does not inject it.
-- Default runs use deterministic Memory rules; ambiguous Candidates remain `needs_review` without evaluator token cost.
-- Optional OpenAI embeddings exist. Local BGE-M3 remains a future option because no official DeepSeek embedding endpoint was found in the docs checked earlier.
+- The persistent embedding cache is not an ANN index. Eligible rows are still loaded and ranked in Python.
+- Obsolete cache rows have no eviction, orphan cleanup, or storage quota.
+- JD retrieval uses structured `JobRequirement.evidence_text`, not arbitrary raw-document chunking.
+- The strategy benchmark has only three deterministic query cases; it is regression scaffolding, not production ranking evidence.
+- RRF weights and the semantic threshold are fixed rather than calibrated on real user judgments.
+- There is no BM25 index, vector database, cross-encoder/LLM reranker, citation-grounding evaluation, or large Recall@K/nDCG dataset.
+- DeepSeek semantic Memory evaluation exists and is tested but is not injected into default AgentRuns. Ambiguous Candidates remain `needs_review` without evaluator cost.
+- Optional OpenAI embeddings exist. Local BGE-M3 remains unwired.
 
-## Cleanup
+## Recommended Next Decision
 
-Run `git status --short`. Remove `.codex-*.patch` and `.test-tmp` artifacts if present; never stage them.
+The next defensible RAG step is evaluation depth, not immediately adding another retrieval mechanism:
 
-## Next Steps
+1. Collect a larger labeled query/document set covering exact IDs, aliases, semantic paraphrases, cross-language queries, scope boundaries, stale facts, and hard negatives.
+2. Record relevance grades and expected provenance so Recall@K, MRR, nDCG, leakage, and citation support can be measured.
+3. Use the measured failure modes to choose one next mechanism: BM25, ANN indexing, a reranker, improved chunking, or broader query routing.
+4. Add that work as a new TODO with an explicit acceptance threshold before implementation.
 
-1. All 20 tracked capabilities are complete at their documented minimal scope.
-2. T20 turns one measured T19 failure pattern into an auditable route; expand the labeled query set before adding more intent classes or a reranker.
-3. Do not begin multi-agent work without a concrete scenario and explicit user direction.
-
-Do not start multi-agent work yet.
+Do not begin multi-agent work without a concrete CareerOps scenario and explicit user direction.
